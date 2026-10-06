@@ -513,16 +513,7 @@ final class AlertDialogs: NSObject, LearningDialogs {
     }
 
     func about() {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "關於善解輸入法"
-        alert.informativeText = "善解輸入法 v1.0.1"
-        alert.addButton(withTitle: "好")
-        alert.layout()
-        alert.window.level = .modalPanel
-        alert.window.center()
-        NSApp.activate()
-        alert.window.makeKeyAndOrderFront(nil)
+        show(.informational, "關於善解輸入法", "善解輸入法 v1.0.1", buttons: ["好"], destructive: nil) { _ in }
     }
 
     private func show(_ style: NSAlert.Style, _ title: String, _ message: String, buttons: [String],

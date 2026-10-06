@@ -167,6 +167,16 @@ final class LearningTests: XCTestCase {
         XCTAssertEqual(dialogs.failures, 1, "the failure window did not open")
     }
 
+    // MARK: menu: about dialog
+
+    /// The about dialog opens and the fake dialogs counter increments (S4 section 6).
+    func testAboutDialogOpens() {
+        let dialogs = FakeDialogs()
+        let c = Controller(makeShell(dialogs: dialogs))
+        c.session.perform(.about)
+        XCTAssertEqual(dialogs.aboutShown, 1, "the about window did not open")
+    }
+
     func testBackupIsOnByDefaultAndTheExclusionSurvivesAClear() throws {
         let dir = TestLearning.directory()
         let c = Controller(makeShell(learning: dir))
