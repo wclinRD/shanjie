@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>安裝善解輸入法</title>
+    <options customize="never" require-scripts="false" allow-external-scripts="false"/>
+    <license file="release/安裝善解輸入法.app/Contents/Resources/LICENSES/LICENSE"/>
+    <conclusion file="release/安裝善解輸入法.app/Contents/Resources/LICENSES/LICENSE"/>
+    <choices-outline>
+        <line choice="default">
+            <line id="shanjie-installer"/>
+        </line>
+    </choices-outline>
+    <choice id="shanjie-installer" visible="false">
+        <pkg-ref id="com.nyanako.shanjie.installer"/>
+    </choice>
+    <pkg-ref id="com.nyanako.shanjie.installer" version="0.2.0" onConclusion="none">shanjie-installer.pkg</pkg-ref>
+</installer-gui-script>

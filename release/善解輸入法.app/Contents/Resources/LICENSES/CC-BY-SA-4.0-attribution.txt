@@ -1,0 +1,12 @@
+overlay-add.tsv and bigram.sjlm are licensed under the Creative Commons
+Attribution-ShareAlike 4.0 International license (CC BY-SA 4.0):
+https://creativecommons.org/licenses/by-sa/4.0/
+
+overlay-add.tsv: built from Wikipedia and Wiktionary page titles.
+  Attribution: Wikipedia contributors, Wiktionary contributors.
+bigram.sjlm: word counts from Wikipedia articles, Mozilla Common Voice
+  sentences (CC0), Tatoeba sentences (CC BY 2.0 FR) and synthetic sentences.
+  Attribution: Wikipedia contributors, Tatoeba contributors.
+
+The program itself is Apache-2.0 (LICENSE); mcbpmf-data.txt is MIT
+(McBopomofo-MIT.txt). Details: data.md.
