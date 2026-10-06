@@ -33,6 +33,11 @@ if [ ! -d "build/善解輸入法.app" ]; then
     exit 1
 fi
 
+echo "Copying app to release directory..."
+# Copy the built app bundle to the release directory
+mkdir -p "$RELEASE_DIR/善解輸入法.app"
+cp -R "build/善解輸入法.app/." "$RELEASE_DIR/善解輸入法.app/"
+
 echo "Creating input method zip file..."
 ZIP_FILE="$RELEASE_DIR/shanjie-$VERSION.zip"
 # Create zip with the app bundle inside
