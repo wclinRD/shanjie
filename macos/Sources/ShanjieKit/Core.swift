@@ -156,7 +156,7 @@ final class CoreEngine {
                 if let c = list[i] { candidates.append(String(cString: c)) }
             }
         }
-        let quickAddPrompt = o.quick_add_prompt.is_null ? nil : String(cString: o.quick_add_prompt)
+        let quickAddPrompt = o.quick_add_prompt == nil ? nil : String(cString: o.quick_add_prompt)
         return .ok(CoreOutput(
             handled: o.handled != 0,
             commit: String(cString: o.commit),

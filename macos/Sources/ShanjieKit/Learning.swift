@@ -48,6 +48,7 @@ public struct MenuEntry: Equatable, Sendable {
         case layout(InputMode)
         case clear
         case toggleBackup
+        case about
     }
 
     public var title: String
@@ -75,6 +76,8 @@ public protocol LearningDialogs: AnyObject {
     func confirmClear(_ answer: @escaping @MainActor (Bool) -> Void)
     /// The clear returned non-zero; never passed off as done.
     func clearFailed()
+    /// "關於善解輸入法": shows a window with the version number.
+    func about()
 }
 
 /// Fixed strings of those windows (R2: no app name, path or count).
@@ -178,6 +181,7 @@ extension Session {
         items.append(MenuEntry(title: T.clear, action: .clear))
         items.append(MenuEntry(title: T.excludeBackup, action: .toggleBackup, checked: shell.backupExcluded))
         if shell.learningUnavailable { items.append(MenuEntry(title: T.unavailable)) }
+        items.append(MenuEntry(title: "關於善解輸入法", action: .about))
         return items
     }
 
@@ -191,6 +195,8 @@ extension Session {
             }
         case .toggleBackup:
             shell.setBackupExcluded(!shell.backupExcluded)
+        case .about:
+            shell.dialogs.about()
         }
     }
 }

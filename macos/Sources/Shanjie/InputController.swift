@@ -69,6 +69,7 @@ final class ShanjieInputController: IMKInputController {
         case .layout(.eten): #selector(selectEtenLayout(_:))
         case .clear: #selector(clearLearning(_:))
         case .toggleBackup: #selector(toggleLearningBackup(_:))
+        case .about: #selector(showAbout(_:))
         }
     }
 
@@ -80,6 +81,7 @@ final class ShanjieInputController: IMKInputController {
     @objc func selectEtenLayout(_ sender: Any?) { perform(.layout(.eten)) }
     @objc func clearLearning(_ sender: Any?) { perform(.clear) }
     @objc func toggleLearningBackup(_ sender: Any?) { perform(.toggleBackup) }
+    @objc func showAbout(_ sender: Any?) { perform(.about) }
 }
 
 /// The controller's current IMKTextInput client.
@@ -508,6 +510,19 @@ final class AlertDialogs: NSObject, LearningDialogs {
 
     func clearFailed() {
         show(.critical, DialogText.failedTitle, DialogText.failedMessage, buttons: [DialogText.ok], destructive: nil) { _ in }
+    }
+
+    func about() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "關於善解輸入法"
+        alert.informativeText = "善解輸入法 v1.0.1"
+        alert.addButton(withTitle: "好")
+        alert.layout()
+        alert.window.level = .modalPanel
+        alert.window.center()
+        NSApp.activate()
+        alert.window.makeKeyAndOrderFront(nil)
     }
 
     private func show(_ style: NSAlert.Style, _ title: String, _ message: String, buttons: [String],
