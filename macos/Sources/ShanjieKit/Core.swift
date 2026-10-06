@@ -17,6 +17,8 @@ struct CoreOutput {
     /// Position of `candidates[0]` in the whole list, and the whole list's length (scroll bar).
     var first: Int
     var total: Int
+    /// Quick add prompt text shown when the user enters quick add mode (Ctrl+Enter).
+    var quickAddPrompt: String?
 }
 
 /// The result of a core call: an output, or the non-zero C ABI return code (carries no input).
@@ -154,6 +156,7 @@ final class CoreEngine {
                 if let c = list[i] { candidates.append(String(cString: c)) }
             }
         }
+        let quickAddPrompt = o.quick_add_prompt.is_null ? nil : String(cString: o.quick_add_prompt)
         return .ok(CoreOutput(
             handled: o.handled != 0,
             commit: String(cString: o.commit),
@@ -163,7 +166,8 @@ final class CoreEngine {
             selected: Int(o.candidate_selected),
             columns: Int(o.candidate_columns),
             first: Int(o.candidate_first),
-            total: Int(o.candidate_total)
+            total: Int(o.candidate_total),
+            quickAddPrompt: quickAddPrompt
         ))
     }
 }

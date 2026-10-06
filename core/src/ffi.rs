@@ -40,6 +40,8 @@ pub struct ShanjieOutput {
     pub candidate_columns: u32,
     pub candidate_first: u32,
     pub candidate_total: u32,
+    /// Quick add prompt text shown when the user enters quick add mode (Ctrl+Enter).
+    pub quick_add_prompt: *const c_char,
 }
 
 /// Opaque to C.
@@ -98,13 +100,23 @@ fn to_key(k: ShanjieKey) -> Option<Key> {
 
 /// Copies an engine output into C-owned memory; `None` when a string holds an interior NUL.
 fn to_c(o: Output) -> Option<*mut ShanjieOutput> {
-    let mut strings = Vec::with_capacity(2 + o.candidates.len());
+    let mut strings =
+        Vec::with_capacity(2 + o.candidates.len() + (o.quick_add_prompt.is_some() as usize));
     strings.push(CString::new(o.commit).ok()?);
     strings.push(CString::new(o.preedit).ok()?);
     for c in o.candidates {
         strings.push(CString::new(c).ok()?);
     }
-    let ptrs: Vec<*const c_char> = strings[2..].iter().map(|s| s.as_ptr()).collect();
+    let quick_add_ptr = if let Some(prompt) = o.quick_add_prompt {
+        strings.push(CString::new(prompt).ok()?);
+        Some(strings.last().unwrap().as_ptr())
+    } else {
+        None
+    };
+    let ptrs: Vec<*const c_char> = strings[2..strings.len() - (quick_add_ptr.is_some() as usize)]
+        .iter()
+        .map(|s| s.as_ptr())
+        .collect();
     let out = ShanjieOutput {
         handled: o.handled as i32,
         commit: strings[0].as_ptr(),
@@ -123,6 +135,7 @@ fn to_c(o: Output) -> Option<*mut ShanjieOutput> {
         candidate_columns: o.columns,
         candidate_first: o.first,
         candidate_total: o.total,
+        quick_add_prompt: quick_add_ptr.unwrap_or(ptr::null()),
     };
     Some(
         Box::into_raw(Box::new(OwnedOutput {

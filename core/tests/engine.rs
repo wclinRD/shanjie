@@ -5,7 +5,10 @@ use std::sync::{Arc, OnceLock};
 
 fn lex() -> Arc<core::Lexicon> {
     static L: OnceLock<Arc<core::Lexicon>> = OnceLock::new();
-    L.get_or_init(|| load_lexicon(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/lexicon")).unwrap()).clone()
+    L.get_or_init(|| {
+        load_lexicon(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/lexicon")).unwrap()
+    })
+    .clone()
 }
 fn eng(l: Layout) -> Engine {
     Engine::with_lexicon(lex(), l)
@@ -14,7 +17,11 @@ fn std() -> Engine {
     eng(Layout::Standard)
 }
 fn plain(c: char) -> Key {
-    if c == ' ' { Key::new(KeyKind::Space) } else { Key::ch(c, 0) }
+    if c == ' ' {
+        Key::new(KeyKind::Space)
+    } else {
+        Key::ch(c, 0)
+    }
 }
 fn k(e: &mut Engine, key: Key) -> Output {
     e.key(key).unwrap()
@@ -38,7 +45,18 @@ const NIHAO: &str = "su3cl3"; // standard layout: ㄋㄧˇ ㄏㄠˇ
 const NI: &str = "ㄋㄧˇ";
 const HAO: &str = "ㄏㄠˇ";
 fn blank(handled: bool) -> Output {
-    Output { handled, commit: String::new(), preedit: String::new(), cursor_utf16: 0, candidates: vec![], selected: None, columns: 0, first: 0, total: 0 }
+    Output {
+        handled,
+        commit: String::new(),
+        preedit: String::new(),
+        cursor_utf16: 0,
+        candidates: vec![],
+        selected: None,
+        columns: 0,
+        first: 0,
+        total: 0,
+        quick_add_prompt: None,
+    }
 }
 /// Independent expectation of the candidate list. `end`: readings end at `ks.len()`; otherwise they start at 0.
 fn expect_cands(ks: &[&str], from_start: bool) -> Vec<String> {
@@ -46,7 +64,11 @@ fn expect_cands(ks: &[&str], from_start: bool) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
     for n in (1..=l.max_len.min(ks.len())).rev() {
-        let part = if from_start { &ks[..n] } else { &ks[ks.len() - n..] };
+        let part = if from_start {
+            &ks[..n]
+        } else {
+            &ks[ks.len() - n..]
+        };
         let key: Vec<String> = part.iter().map(|s| s.to_string()).collect();
         for (w, _) in l.entries(&key) {
             if seen.insert(w.to_string()) {
@@ -83,12 +105,18 @@ fn layout_covers(l: Layout, table: &str, tones: [char; 4]) {
         let o = k(&mut eng(l), plain(key));
         assert!(o.handled && o.preedit == sym.to_string(), "symbol key");
     }
-    let (m, a) = (table.chars().nth(2).unwrap(), if l == Layout::Standard { '8' } else { 'a' }); // ㄇ ㄚ
+    let (m, a) = (
+        table.chars().nth(2).unwrap(),
+        if l == Layout::Standard { '8' } else { 'a' },
+    ); // ㄇ ㄚ
     for (i, tk) in std::iter::once(' ').chain(tones).enumerate() {
         let mut e = eng(l);
         typ(&mut e, &format!("{m}{a}"));
         let o = k(&mut e, plain(tk));
-        assert!(o.handled && o.preedit == top(&format!("ㄇㄚ{}", ["", "ˊ", "ˇ", "ˋ", "˙"][i])), "tone key");
+        assert!(
+            o.handled && o.preedit == top(&format!("ㄇㄚ{}", ["", "ˊ", "ˇ", "ˋ", "˙"][i])),
+            "tone key"
+        );
     }
 }
 #[test]
@@ -109,11 +137,24 @@ fn row1_passthrough_keys_leave_no_trace() {
         Key::ch('s', MOD_CAPSLOCK),
         Key::ch('a', MOD_CONTROL),
         Key::ch('\\', MOD_CONTROL | MOD_SHIFT),
-        Key { kind: KeyKind::Left, ch: '\0', modifiers: MOD_CONTROL },
-        Key { kind: KeyKind::Space, ch: '\0', modifiers: MOD_COMMAND },
+        Key {
+            kind: KeyKind::Left,
+            ch: '\0',
+            modifiers: MOD_CONTROL,
+        },
+        Key {
+            kind: KeyKind::Space,
+            ch: '\0',
+            modifiers: MOD_COMMAND,
+        },
     ];
     // composition, open candidates, selecting, pending syllable
-    let script: Vec<Key> = "su3cl3 ".chars().map(plain).chain([Key::new(KeyKind::Down)]).chain("1su".chars().map(plain)).collect();
+    let script: Vec<Key> = "su3cl3 "
+        .chars()
+        .map(plain)
+        .chain([Key::new(KeyKind::Down)])
+        .chain("1su".chars().map(plain))
+        .collect();
     let (mut a, mut b) = (std(), std());
     for key in &script {
         assert!(k(&mut a, *key) == k(&mut b, *key));
@@ -122,18 +163,40 @@ fn row1_passthrough_keys_leave_no_trace() {
             assert!(!o.handled && o.commit.is_empty());
         }
     }
-    for key in [plain('3'), Key::new(KeyKind::Left), Key::new(KeyKind::Enter)] {
+    for key in [
+        plain('3'),
+        Key::new(KeyKind::Left),
+        Key::new(KeyKind::Enter),
+    ] {
         assert!(k(&mut a, key) == k(&mut b, key));
     }
 }
 
 // ---------- row 2 (s3d: punctuation stays in the composition) ----------
 const PUNCT_TABLE: [(char, char); 13] = [
-    (',', '，'), ('.', '。'), ('/', '？'), ('1', '！'), (';', '：'), ('[', '『'), (']', '』'), ('9', '（'), ('0', '）'),
-    ('`', '～'), ('\\', '｜'), ('\'', '“'), ('=', '＋'),
+    (',', '，'),
+    ('.', '。'),
+    ('/', '？'),
+    ('1', '！'),
+    (';', '：'),
+    ('[', '『'),
+    (']', '』'),
+    ('9', '（'),
+    ('0', '）'),
+    ('`', '～'),
+    ('\\', '｜'),
+    ('\'', '“'),
+    ('=', '＋'),
 ];
 /// Unshifted keys that are punctuation (Apple's Zhuyin, key probe 2026-10-05).
-const PLAIN_PUNCT_TABLE: [(char, char); 6] = [('[', '「'), (']', '」'), ('\\', '、'), ('\'', '‘'), ('=', '＝'), ('`', '·')];
+const PLAIN_PUNCT_TABLE: [(char, char); 6] = [
+    ('[', '「'),
+    (']', '」'),
+    ('\\', '、'),
+    ('\'', '‘'),
+    ('=', '＝'),
+    ('`', '·'),
+];
 
 /// The bracket row without Shift goes into the composition like the Shift table; in Eten, ' and = stay
 /// Zhuyin keys (they are symbols there), the others still give punctuation.
@@ -143,7 +206,10 @@ fn row2_unshifted_bracket_row_is_punctuation() {
         let mut e = std();
         typ(&mut e, NIHAO);
         let o = k(&mut e, plain(c));
-        assert!(o.handled && o.commit.is_empty() && o.preedit == format!("你好{p}"), "{c}");
+        assert!(
+            o.handled && o.commit.is_empty() && o.preedit == format!("你好{p}"),
+            "{c}"
+        );
         let o = kk(&mut e, KeyKind::Enter);
         assert!(o.commit == format!("你好{p}"), "{c}");
     }
@@ -151,7 +217,10 @@ fn row2_unshifted_bracket_row_is_punctuation() {
         let o = k(&mut eng(Layout::Eten), plain(c));
         if c == '\'' || c == '=' {
             let zy = if c == '\'' { "ㄘ" } else { "ㄦ" };
-            assert!(o.handled && o.preedit == zy, "Eten {c} is the Zhuyin key {zy}");
+            assert!(
+                o.handled && o.preedit == zy,
+                "Eten {c} is the Zhuyin key {zy}"
+            );
         } else {
             assert!(o.handled && o.preedit == p.to_string(), "Eten {c}");
         }
@@ -167,10 +236,19 @@ fn row2_punctuation_goes_into_the_composition() {
         typ(&mut e, NIHAO);
         typ(&mut e, "c"); // pending ㄏ is dropped
         let o = k(&mut e, Key::ch(c, MOD_SHIFT));
-        assert!(o.handled && o.commit.is_empty() && o.preedit == format!("你好{p}") && o.candidates.is_empty(), "{c}");
+        assert!(
+            o.handled
+                && o.commit.is_empty()
+                && o.preedit == format!("你好{p}")
+                && o.candidates.is_empty(),
+            "{c}"
+        );
         assert!(o.cursor_utf16 == 3, "{c}");
         let o = kk(&mut e, KeyKind::Enter);
-        assert!(o.handled && o.commit == format!("你好{p}") && o.preedit.is_empty(), "{c}");
+        assert!(
+            o.handled && o.commit == format!("你好{p}") && o.preedit.is_empty(),
+            "{c}"
+        );
         assert!(kk(&mut e, KeyKind::Enter) == blank(false)); // state fully cleared
     }
     // Ctrl+\ with candidates open: they close, 、 goes in after the composition.
@@ -178,7 +256,13 @@ fn row2_punctuation_goes_into_the_composition() {
     let shown = typ(&mut e, "su3").preedit;
     typ(&mut e, " "); // candidates open
     let o = k(&mut e, Key::ch('\\', MOD_CONTROL));
-    assert!(o.handled && o.commit.is_empty() && o.preedit == format!("{shown}、") && o.candidates.is_empty() && o.selected.is_none());
+    assert!(
+        o.handled
+            && o.commit.is_empty()
+            && o.preedit == format!("{shown}、")
+            && o.candidates.is_empty()
+            && o.selected.is_none()
+    );
     // Ctrl+\ drops a pending syllable too.
     let mut e = std();
     typ(&mut e, NIHAO);
@@ -263,7 +347,14 @@ fn candidates_never_span_punctuation() {
 fn default_punctuation_candidates() {
     let list = |c: char| {
         let mut e = std();
-        k(&mut e, if c == '[' { plain(c) } else { Key::ch(c, MOD_SHIFT) });
+        k(
+            &mut e,
+            if c == '[' {
+                plain(c)
+            } else {
+                Key::ch(c, MOD_SHIFT)
+            },
+        );
         kk(&mut e, KeyKind::Space).candidates
     };
     assert!(list('[').contains(&"『".to_string()) && list('[')[0] == "「");
@@ -330,8 +421,22 @@ fn set_punctuation_validates_and_keeps_the_old_table() {
     let too_many_lines = "，\t、\n".repeat(1001);
     let too_big = format!("，\t{}", "、".repeat(30_000));
     // The last one has a valid line before the invalid one: nothing of it may apply.
-    for bad in ["", "\n\n", "，\n", "，\t", "，\t、\t", "，，\t、", too_many_lines.as_str(), too_big.as_str(), "，\t《\n，\n"] {
-        assert!(!e.set_punctuation(bad), "accepted an invalid table ({} bytes)", bad.len());
+    for bad in [
+        "",
+        "\n\n",
+        "，\n",
+        "，\t",
+        "，\t、\t",
+        "，，\t、",
+        too_many_lines.as_str(),
+        too_big.as_str(),
+        "，\t《\n，\n",
+    ] {
+        assert!(
+            !e.set_punctuation(bad),
+            "accepted an invalid table ({} bytes)",
+            bad.len()
+        );
         assert!(comma(&mut e) == kept, "a refused table changed the old one");
     }
     assert!(e.set_punctuation("，\t、\n，\t《\n"));
@@ -352,7 +457,12 @@ fn punctuation_counts_toward_the_limit() {
         shown = typ(&mut e, "su3").preedit;
     }
     let o = k(&mut e, Key::ch(',', MOD_SHIFT));
-    assert!(o.handled && o.commit == format!("{shown}，") && o.preedit.is_empty() && o.cursor_utf16 == 0);
+    assert!(
+        o.handled
+            && o.commit == format!("{shown}，")
+            && o.preedit.is_empty()
+            && o.cursor_utf16 == 0
+    );
 }
 
 // ---------- rows 3-8, 15 ----------
@@ -363,7 +473,9 @@ fn row15_candidate_range_order_and_dedup() {
     typ(&mut e, NIHAO);
     let o = kk(&mut e, KeyKind::Down);
     let want = cands(&[NI, HAO]);
-    assert!(o.handled && o.selected == Some(0) && o.candidates[..] == want[..9] && want[0] == "你好");
+    assert!(
+        o.handled && o.selected == Some(0) && o.candidates[..] == want[..9] && want[0] == "你好"
+    );
     // cursor in the middle of three syllables: range ends at the cursor
     kk(&mut e, KeyKind::Esc);
     kk(&mut e, KeyKind::Esc);
@@ -389,7 +501,13 @@ fn rows3_to_8_candidate_keys() {
     // 4 (s3b2 8.2): collapsed down expands the grid and leaves the selection alone; up on the first
     // row collapses again
     let o = kk(&mut e, KeyKind::Down);
-    assert!(o.selected == Some(0) && o.columns == 9 && o.first == 0 && o.total as usize == all.len() && o.candidates == all[..45]);
+    assert!(
+        o.selected == Some(0)
+            && o.columns == 9
+            && o.first == 0
+            && o.total as usize == all.len()
+            && o.candidates == all[..45]
+    );
     let o = kk(&mut e, KeyKind::Up);
     assert!(o.selected == Some(0) && o.columns == 0 && o.candidates == page(0));
     // 4: up/right move across pages, clamped at both ends
@@ -422,7 +540,9 @@ fn rows3_to_8_candidate_keys() {
     // 3: digit picks the n-th of the current page and closes
     kk(&mut e, KeyKind::Space);
     let o = k(&mut e, plain('3'));
-    assert!(o.handled && o.selected.is_none() && o.candidates.is_empty() && o.preedit == all[9 + 2]);
+    assert!(
+        o.handled && o.selected.is_none() && o.candidates.is_empty() && o.preedit == all[9 + 2]
+    );
     // 3: a digit beyond the (short) last page is ignored, candidates stay open
     let mut e = std();
     open_shi(&mut e);
@@ -443,7 +563,13 @@ fn rows3_to_8_candidate_keys() {
         let mut e = std();
         open_shi(&mut e);
         let o = kk(&mut e, kind);
-        assert!(o.handled && o.selected.is_none() && o.candidates.is_empty() && o.preedit == top("ㄕˋ") && o.cursor_utf16 == 1);
+        assert!(
+            o.handled
+                && o.selected.is_none()
+                && o.candidates.is_empty()
+                && o.preedit == top("ㄕˋ")
+                && o.cursor_utf16 == 1
+        );
     }
     // 8: any other key closes, then runs from rule 9: a zhuyin key starts a syllable
     let mut e = std();
@@ -501,7 +627,12 @@ fn grid_expanded_keys() {
         let mut e = std();
         expanded_shi(&mut e);
         let o = kk(&mut e, kind);
-        assert!(o.selected.is_none() && o.candidates.is_empty() && o.columns == 0 && o.preedit == top("ㄕˋ"));
+        assert!(
+            o.selected.is_none()
+                && o.candidates.is_empty()
+                && o.columns == 0
+                && o.preedit == top("ㄕˋ")
+        );
     }
 }
 #[test]
@@ -510,7 +641,12 @@ fn grid_scrolls_to_keep_the_selected_row_visible() {
     let all = expanded_shi(&mut e);
     assert!(all.len() > 9 * 7, "fixture: more than seven pages");
     let o = kk(&mut e, KeyKind::Down);
-    assert!(o.first == 0 && o.candidates == all[..45] && o.selected == Some(9) && o.total as usize == all.len());
+    assert!(
+        o.first == 0
+            && o.candidates == all[..45]
+            && o.selected == Some(9)
+            && o.total as usize == all.len()
+    );
     presses(&mut e, 3, KeyKind::Down);
     let o = kk(&mut e, KeyKind::Down); // row 5: top moves to 1
     assert!(o.first == 9 && at(&o) == 45 && o.selected == Some(36));
@@ -531,7 +667,13 @@ fn grid_expands_with_the_selected_page_on_top() {
         presses(&mut e, rights, KeyKind::Right);
         let sel = spaces * 9 + rights;
         let o = kk(&mut e, KeyKind::Down);
-        assert!(o.columns == 9 && o.first as usize == spaces * 9 && o.selected == Some(rights) && at(&o) == sel, "{spaces} {rights}");
+        assert!(
+            o.columns == 9
+                && o.first as usize == spaces * 9
+                && o.selected == Some(rights)
+                && at(&o) == sel,
+            "{spaces} {rights}"
+        );
     }
     // from page 2: up scrolls up one row (same position), the next up collapses
     let mut e = std();
@@ -568,8 +710,14 @@ fn grid_short_last_row() {
     let target = (last - 1) * 9 + 8;
     presses(&mut e, target, KeyKind::Right);
     let o = kk(&mut e, KeyKind::Down);
-    assert!(at(&o) == len - 1, "down into a shorter row ends at its last candidate");
-    assert!(at(&kk(&mut e, KeyKind::Down)) == len - 1, "down on the last row does nothing");
+    assert!(
+        at(&o) == len - 1,
+        "down into a shorter row ends at its last candidate"
+    );
+    assert!(
+        at(&kk(&mut e, KeyKind::Down)) == len - 1,
+        "down on the last row does nothing"
+    );
     // space on the last row wraps to the first row, same column
     assert!(at(&kk(&mut e, KeyKind::Space)) == rem - 1);
     // space from the penultimate row also lands on the last candidate
@@ -627,7 +775,12 @@ fn expanded_for(syls: &[&str]) -> Output {
 #[test]
 fn grid_columns_are_always_nine() {
     // s3b2 §9: whatever the longest candidate is, a row is one page.
-    for syls in [&["ㄕˋ"][..], &["ㄋㄧˇ", "ㄏㄠˇ"][..], &["ㄅㄚ", "ㄅㄚ", "ㄅㄚ"][..], &["ㄅㄚ", "ㄅㄠˇ", "ㄩㄢˊ", "ㄗˇ", "ㄅㄧㄥ"][..]] {
+    for syls in [
+        &["ㄕˋ"][..],
+        &["ㄋㄧˇ", "ㄏㄠˇ"][..],
+        &["ㄅㄚ", "ㄅㄚ", "ㄅㄚ"][..],
+        &["ㄅㄚ", "ㄅㄠˇ", "ㄩㄢˊ", "ㄗˇ", "ㄅㄧㄥ"][..],
+    ] {
         let o = expanded_for(syls);
         assert!(o.columns == 9, "{syls:?}: {}", o.columns);
     }
@@ -676,7 +829,14 @@ fn rows9_to_14_pending_syllable() {
     assert!(kk(&mut e, KeyKind::Backspace).preedit.is_empty());
     // 13: other keys are handled and ignored
     typ(&mut e, "s");
-    for key in [KeyKind::Enter, KeyKind::Left, KeyKind::Tab, KeyKind::Up, KeyKind::Delete, KeyKind::Down] {
+    for key in [
+        KeyKind::Enter,
+        KeyKind::Left,
+        KeyKind::Tab,
+        KeyKind::Up,
+        KeyKind::Delete,
+        KeyKind::Down,
+    ] {
         let o = kk(&mut e, key);
         assert!(o.handled && o.commit.is_empty() && o.preedit == "ㄋ");
     }
@@ -705,7 +865,12 @@ fn syllable_not_in_lexicon_is_rejected_composition_unchanged() {
     let before = typ(&mut e, "1m"); // ㄅㄩ
     for tk in [' ', '6', '3', '4', '7'] {
         let o = k(&mut e, plain(tk));
-        assert!(o.handled && o.commit.is_empty() && o.preedit == before.preedit && o.cursor_utf16 == before.cursor_utf16);
+        assert!(
+            o.handled
+                && o.commit.is_empty()
+                && o.preedit == before.preedit
+                && o.cursor_utf16 == before.cursor_utf16
+        );
     }
     let o = kk(&mut e, KeyKind::Backspace); // pending intact: ㄩ removed, ㄅ left
     assert!(o.preedit.ends_with("ㄅ") && o.preedit.starts_with('你'));
@@ -748,7 +913,13 @@ fn rows16_to_20_composition_editing() {
 }
 #[test]
 fn row21_other_key_commits_then_passes_through() {
-    for key in [Key::new(KeyKind::Tab), Key::ch('a', MOD_SHIFT), Key::ch('x', MOD_SHIFT), Key::ch('-', MOD_SHIFT), Key::ch('5', MOD_SHIFT)] {
+    for key in [
+        Key::new(KeyKind::Tab),
+        Key::ch('a', MOD_SHIFT),
+        Key::ch('x', MOD_SHIFT),
+        Key::ch('-', MOD_SHIFT),
+        Key::ch('5', MOD_SHIFT),
+    ] {
         let mut e = std();
         typ(&mut e, NIHAO);
         let o = k(&mut e, key);
@@ -759,7 +930,15 @@ fn row21_other_key_commits_then_passes_through() {
 #[test]
 fn row22_empty_composition_passes_through() {
     let mut e = std();
-    for key in [Key::new(KeyKind::Tab), Key::new(KeyKind::Enter), Key::new(KeyKind::Esc), Key::new(KeyKind::Space), Key::new(KeyKind::Left), Key::new(KeyKind::Backspace), Key::ch('a', MOD_SHIFT)] {
+    for key in [
+        Key::new(KeyKind::Tab),
+        Key::new(KeyKind::Enter),
+        Key::new(KeyKind::Esc),
+        Key::new(KeyKind::Space),
+        Key::new(KeyKind::Left),
+        Key::new(KeyKind::Backspace),
+        Key::ch('a', MOD_SHIFT),
+    ] {
         assert!(k(&mut e, key) == blank(false));
     }
 }
@@ -769,7 +948,10 @@ fn row22_empty_composition_passes_through() {
 /// takes it back; Enter sends it. A second tone key with the mark composing is rule 16 (ignored).
 #[test]
 fn row22a_tone_key_on_empty_composition_types_its_mark() {
-    for (name, layout, keys) in [("standard", Layout::Standard, ['6', '3', '4', '7']), ("eten", Layout::Eten, ['2', '3', '4', '1'])] {
+    for (name, layout, keys) in [
+        ("standard", Layout::Standard, ['6', '3', '4', '7']),
+        ("eten", Layout::Eten, ['2', '3', '4', '1']),
+    ] {
         let mut e = eng(layout);
         for (key, mark) in keys.iter().zip(["ˊ", "ˇ", "ˋ", "˙"]) {
             let o = k(&mut e, plain(*key));
@@ -777,9 +959,15 @@ fn row22a_tone_key_on_empty_composition_types_its_mark() {
             assert!(o.commit.is_empty(), "{name} {key}: nothing is sent yet");
             assert_eq!(o.preedit, mark, "{name} {key}");
             let again = k(&mut e, plain(*key));
-            assert!(again.handled && again.commit.is_empty() && again.preedit == mark, "{name} {key}: rule 16");
+            assert!(
+                again.handled && again.commit.is_empty() && again.preedit == mark,
+                "{name} {key}: rule 16"
+            );
             let gone = kk(&mut e, KeyKind::Backspace);
-            assert!(gone.handled && gone.preedit.is_empty() && gone.commit.is_empty(), "{name} {key}: Backspace");
+            assert!(
+                gone.handled && gone.preedit.is_empty() && gone.commit.is_empty(),
+                "{name} {key}: Backspace"
+            );
             k(&mut e, plain(*key));
             let sent = kk(&mut e, KeyKind::Enter);
             assert_eq!(sent.commit, mark, "{name} {key}: Enter sends the mark");
@@ -789,7 +977,11 @@ fn row22a_tone_key_on_empty_composition_types_its_mark() {
         // mark appears either sent or composing.
         let o = k(&mut e, Key::ch(keys[1], MOD_SHIFT));
         let marks = ['ˊ', 'ˇ', 'ˋ', '˙'];
-        assert!(!o.commit.contains(marks) && !o.preedit.contains(marks), "{name}: Shift+{}", keys[1]);
+        assert!(
+            !o.commit.contains(marks) && !o.preedit.contains(marks),
+            "{name}: Shift+{}",
+            keys[1]
+        );
     }
 }
 
@@ -803,11 +995,17 @@ fn pick(e: &mut Engine, list: &[String], word: &str) -> Output {
 #[test]
 fn fixed_one_syllable_word_survives_edits_and_is_removed_with_its_syllable() {
     let two = cands(&[NI, HAO]);
-    let alt = two.iter().find(|w| w.chars().count() == 1 && **w != top(HAO)).unwrap().clone();
+    let alt = two
+        .iter()
+        .find(|w| w.chars().count() == 1 && **w != top(HAO))
+        .unwrap()
+        .clone();
     let mut e = std();
     typ(&mut e, NIHAO);
     let o = pick(&mut e, &two, &alt);
-    assert!(o.preedit == format!("{}{alt}", top(NI)) && o.cursor_utf16 == 2 && o.selected.is_none());
+    assert!(
+        o.preedit == format!("{}{alt}", top(NI)) && o.cursor_utf16 == 2 && o.selected.is_none()
+    );
     // insert at the cursor, right of the fixed word: unchanged
     let o = typ(&mut e, "su3");
     assert!(o.preedit == format!("{}{alt}{}", top(NI), top(NI)));
@@ -830,7 +1028,11 @@ fn fixed_one_syllable_word_survives_edits_and_is_removed_with_its_syllable() {
 #[test]
 fn fixed_two_syllable_word_shifts_and_is_removed_when_cut() {
     let two = cands(&[NI, HAO]);
-    let w = two.iter().find(|w| w.chars().count() == 2 && **w != "你好").unwrap().clone();
+    let w = two
+        .iter()
+        .find(|w| w.chars().count() == 2 && **w != "你好")
+        .unwrap()
+        .clone();
     let build = || {
         let mut e = std();
         typ(&mut e, NIHAO);
@@ -863,7 +1065,22 @@ fn fixed_two_syllable_word_shifts_and_is_removed_when_cut() {
 #[test]
 fn reset_both_modes_equal_fresh_engine() {
     let probe = |e: &mut Engine| -> Vec<Output> {
-        let keys: Vec<Key> = "su3 ".chars().map(plain).chain([Key::new(KeyKind::Left), Key::new(KeyKind::Esc), Key::new(KeyKind::Tab)]).chain("cl3".chars().map(plain)).chain([Key::new(KeyKind::Down), Key::new(KeyKind::Enter), Key::new(KeyKind::Home), Key::new(KeyKind::Enter)]).collect();
+        let keys: Vec<Key> = "su3 "
+            .chars()
+            .map(plain)
+            .chain([
+                Key::new(KeyKind::Left),
+                Key::new(KeyKind::Esc),
+                Key::new(KeyKind::Tab),
+            ])
+            .chain("cl3".chars().map(plain))
+            .chain([
+                Key::new(KeyKind::Down),
+                Key::new(KeyKind::Enter),
+                Key::new(KeyKind::Home),
+                Key::new(KeyKind::Enter),
+            ])
+            .collect();
         keys.into_iter().map(|key| e.key(key).unwrap()).collect()
     };
     for mode in [ResetMode::Commit, ResetMode::Discard] {
@@ -902,7 +1119,9 @@ fn auto_commit_at_40th_syllable() {
         assert!(o.handled && o.commit.is_empty() && o.preedit.chars().count() == i);
     }
     let o = typ(&mut e, "su3");
-    assert!(o.handled && o.commit.chars().count() == 40 && o.preedit.is_empty() && o.cursor_utf16 == 0);
+    assert!(
+        o.handled && o.commit.chars().count() == 40 && o.preedit.is_empty() && o.cursor_utf16 == 0
+    );
     let o = typ(&mut e, "su3");
     assert!(o.commit.is_empty() && o.preedit == top(NI));
 }

@@ -233,6 +233,8 @@ pub struct Output {
     pub first: u32,
     /// Length of the whole list; 0 when closed.
     pub total: u32,
+    /// Quick add prompt text shown when the user enters quick add mode (Ctrl+Enter).
+    pub quick_add_prompt: Option<String>,
 }
 
 struct Fixed {
@@ -340,6 +342,10 @@ pub struct Engine {
     learn_panic: bool,
     /// Test-purpose injection: the next ⌘⌫ forget panics after changing memory (§6.13).
     forget_panic: bool,
+    /// Quick add mode: user pressed Ctrl+Enter to enter the quick add phrase state.
+    quick_add_mode: bool,
+    /// The text being quickly added, displayed in the prompt.
+    quick_add_text: String,
 }
 
 /// Base lexicon + overlay from `data_dir` (§5), same as the eval CLI default. The overlay rows are
@@ -407,6 +413,8 @@ impl Engine {
             today: None,
             learn_panic: false,
             forget_panic: false,
+            quick_add_mode: false,
+            quick_add_text: String::new(),
         }
     }
 
@@ -486,6 +494,64 @@ impl Engine {
     /// Get a mutable reference to the custom vocabulary store.
     pub fn custom_vocab_mut(&mut self) -> Option<&mut VocabStore> {
         self.custom_vocab.as_mut()
+    }
+
+    // ---- Quick add phrase (ChiaKey integration) ----
+
+    /// Enter quick add mode with the current composing text.
+    pub fn enter_quick_add(&mut self) -> String {
+        self.quick_add_mode = true;
+        self.quick_add_text = self.display.clone();
+        format!(
+            "正在選取字詞組：{}，請按 ENTER 鍵加入資料庫",
+            self.quick_add_text
+        )
+    }
+
+    /// Cancel quick add mode without adding vocabulary.
+    pub fn cancel_quick_add(&mut self) {
+        self.quick_add_mode = false;
+        self.quick_add_text.clear();
+    }
+
+    /// Confirm quick add: add the current composing text to custom vocabulary and exit quick add mode.
+    pub fn confirm_quick_add(&mut self) -> Result<bool, std::io::Error> {
+        if !self.quick_add_mode {
+            return Ok(false);
+        }
+        let word = self.quick_add_text.clone();
+        if word.is_empty() {
+            self.cancel_quick_add();
+            return Ok(false);
+        }
+
+        // Get the syllables for the current text from syls (the current composition)
+        let syls = self.syls.clone();
+
+        let Some(store) = &mut self.custom_vocab else {
+            self.cancel_quick_add();
+            return Ok(false);
+        };
+
+        let added = store.add(syls, word);
+        if added {
+            store.save()?;
+        }
+
+        // Exit quick add mode and clear the composition
+        self.cancel_quick_add();
+        self.clear_all();
+        Ok(added)
+    }
+
+    /// Check if the engine is in quick add mode.
+    pub fn is_quick_add_mode(&self) -> bool {
+        self.quick_add_mode
+    }
+
+    /// Get the quick add text being displayed in the prompt.
+    pub fn quick_add_text(&self) -> &str {
+        &self.quick_add_text
     }
 
     /// §4: forget everything: memory, pending learns, files. Memory and pending learns go even when
@@ -757,6 +823,8 @@ impl Engine {
         self.display.clear();
         self.path.clear();
         self.cands = None;
+        self.quick_add_mode = false;
+        self.quick_add_text.clear();
     }
 
     fn pending(&self) -> String {
@@ -804,6 +872,14 @@ impl Engine {
             columns,
             first,
             total,
+            quick_add_prompt: if self.quick_add_mode {
+                Some(format!(
+                    "正在選取字詞組：{}，請按 ENTER 鍵加入資料庫",
+                    self.quick_add_text
+                ))
+            } else {
+                None
+            },
         }
     }
 
@@ -927,7 +1003,31 @@ impl Engine {
             self.forget_highlighted()?;
             return self.handled();
         }
+        // Quick add mode: Ctrl+Enter enters quick add mode, ESC cancels, ENTER confirms.
+        if self.quick_add_mode {
+            match k.kind {
+                KeyKind::Enter => {
+                    let _added = self
+                        .confirm_quick_add()
+                        .map_err(|_| EngineError::Internal)?;
+                    return Ok(self.view(true, String::new()));
+                }
+                KeyKind::Esc => {
+                    self.cancel_quick_add();
+                    return Ok(self.view(true, String::new()));
+                }
+                _ => {
+                    // Ignore other keys in quick add mode
+                    return Ok(self.view(true, String::new()));
+                }
+            }
+        }
         let ctrl_bs = is_char && k.ch == '\\' && m == MOD_CONTROL;
+        // Enter quick add mode: Ctrl+Enter (modifiers & MOD_CONTROL != 0 AND key is Enter)
+        if k.kind == KeyKind::Enter && m & MOD_CONTROL != 0 {
+            let _ = self.enter_quick_add();
+            return Ok(self.view(true, String::new()));
+        }
         // 1: pass through, no state change.
         if m & (MOD_OPTION | MOD_COMMAND | MOD_CAPSLOCK) != 0 || (m & MOD_CONTROL != 0 && !ctrl_bs)
         {
@@ -1328,5 +1428,184 @@ impl Engine {
         });
         self.fixed.sort_by_key(|f| f.start);
         self.refresh()
+    }
+}
+
+#[cfg(test)]
+mod quick_add_tests {
+    use super::*;
+    use crate::vocab::VocabStore;
+    use std::path::PathBuf;
+
+    fn temp_dir() -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "shanjie-quickadd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn test_quick_add_enter_and_prompt() {
+        let data = Lexicon::parse("ㄒㄧㄣ 鑫 -1.0\n").unwrap();
+        let mut engine = Engine::with_lexicon(Arc::new(data), Layout::Standard);
+        // Type some characters to create a composition
+        let key_v = Key {
+            kind: KeyKind::Char,
+            ch: 'v',
+            modifiers: 0,
+        };
+        let key_u = Key {
+            kind: KeyKind::Char,
+            ch: 'u',
+            modifiers: 0,
+        };
+        let key_p = Key {
+            kind: KeyKind::Char,
+            ch: 'p',
+            modifiers: 0,
+        };
+        let key_space = Key {
+            kind: KeyKind::Space,
+            ch: '\0',
+            modifiers: 0,
+        };
+        let _ = engine.key(key_v);
+        let _ = engine.key(key_u);
+        let _ = engine.key(key_p);
+        let _ = engine.key(key_space);
+
+        // Enter quick add mode with Ctrl+Enter
+        let ctrl_enter = Key {
+            kind: KeyKind::Enter,
+            ch: '\0',
+            modifiers: MOD_CONTROL,
+        };
+        let out = engine.key(ctrl_enter).unwrap();
+        assert!(out.handled, "Ctrl+Enter should be handled");
+        assert_eq!(
+            out.quick_add_prompt,
+            Some("正在選取字詞組：鑫，請按 ENTER 鍵加入資料庫".to_string())
+        );
+        assert!(engine.is_quick_add_mode(), "Should be in quick add mode");
+        assert_eq!(engine.quick_add_text(), "鑫");
+    }
+
+    #[test]
+    fn test_quick_add_cancel() {
+        let data = Lexicon::parse("ㄒㄧㄣ 鑫 -1.0\n").unwrap();
+        let mut engine = Engine::with_lexicon(Arc::new(data), Layout::Standard);
+        let key_v = Key {
+            kind: KeyKind::Char,
+            ch: 'v',
+            modifiers: 0,
+        };
+        let key_u = Key {
+            kind: KeyKind::Char,
+            ch: 'u',
+            modifiers: 0,
+        };
+        let key_p = Key {
+            kind: KeyKind::Char,
+            ch: 'p',
+            modifiers: 0,
+        };
+        let key_space = Key {
+            kind: KeyKind::Space,
+            ch: '\0',
+            modifiers: 0,
+        };
+        let _ = engine.key(key_v);
+        let _ = engine.key(key_u);
+        let _ = engine.key(key_p);
+        let _ = engine.key(key_space);
+
+        // Enter quick add mode
+        let ctrl_enter = Key {
+            kind: KeyKind::Enter,
+            ch: '\0',
+            modifiers: MOD_CONTROL,
+        };
+        let _ = engine.key(ctrl_enter);
+
+        // Cancel with ESC
+        let esc = Key {
+            kind: KeyKind::Esc,
+            ch: '\0',
+            modifiers: 0,
+        };
+        let out = engine.key(esc).unwrap();
+        assert!(
+            !engine.is_quick_add_mode(),
+            "Should not be in quick add mode after ESC"
+        );
+        assert_eq!(out.quick_add_prompt, None);
+    }
+
+    #[test]
+    fn test_quick_add_confirm() {
+        let d = temp_dir();
+        let data = Lexicon::parse("ㄒㄧㄣ 鑫 -1.0\n").unwrap();
+        let mut engine = Engine::with_lexicon(Arc::new(data), Layout::Standard);
+        // Open custom vocabulary
+        engine.custom_vocab_open(&d).unwrap();
+
+        // Type some characters to create a composition
+        let key_v = Key {
+            kind: KeyKind::Char,
+            ch: 'v',
+            modifiers: 0,
+        };
+        let key_u = Key {
+            kind: KeyKind::Char,
+            ch: 'u',
+            modifiers: 0,
+        };
+        let key_p = Key {
+            kind: KeyKind::Char,
+            ch: 'p',
+            modifiers: 0,
+        };
+        let key_space = Key {
+            kind: KeyKind::Space,
+            ch: '\0',
+            modifiers: 0,
+        };
+        let _ = engine.key(key_v);
+        let _ = engine.key(key_u);
+        let _ = engine.key(key_p);
+        let _ = engine.key(key_space);
+
+        // Enter quick add mode
+        let ctrl_enter = Key {
+            kind: KeyKind::Enter,
+            ch: '\0',
+            modifiers: MOD_CONTROL,
+        };
+        let _ = engine.key(ctrl_enter);
+
+        // Confirm with ENTER
+        let enter = Key {
+            kind: KeyKind::Enter,
+            ch: '\0',
+            modifiers: 0,
+        };
+        let out = engine.key(enter).unwrap();
+        assert!(
+            !engine.is_quick_add_mode(),
+            "Should not be in quick add mode after ENTER"
+        );
+        assert_eq!(out.quick_add_prompt, None);
+
+        // Verify the word was added to custom vocabulary
+        let store = VocabStore::open(&d).unwrap();
+        assert_eq!(store.words().len(), 1);
+        assert_eq!(store.words()[0].word, "鑫");
     }
 }

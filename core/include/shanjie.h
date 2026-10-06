@@ -9,11 +9,11 @@
  *  - A handle is not thread-safe: make every call on one thread (the IMK main thread).
  *  - Any non-zero return: treat the key as not handled (pass it through) and do not record it.
  *
- * Return codes: 0 success, 1 a required pointer is NULL, 2 invalid input (data_dir or LM path not
- * UTF-8, ch not a Unicode scalar, kind / layout / mode / profile out of range), 3 data load failed
- * (including an unreadable or malformed LM file), 4 internal error (caught panic or decode/encode
- * error; the engine has already been reset in discard mode). shanjie_engine_load_lm failing leaves the
- * LM state as it was (no LM, or the previously loaded one).
+ * Quick add mode (ChiaKey integration):
+ *  - Pressing Ctrl+Enter while composing enters quick add mode. The output's quick_add_prompt field
+ *    contains the prompt text "正在選取字詞組：[text]，請按 ENTER 鍵加入資料庫".
+ *  - In quick add mode, pressing ENTER confirms and adds the composing text to custom vocabulary.
+ *  - In quick add mode, pressing ESC cancels and exits without adding vocabulary.
  *
  * Memory and lifetime:
  *  - On a non-zero return, *out is set to NULL (when out itself is non-NULL) and nothing is allocated.
@@ -22,6 +22,12 @@
  *  - A ShanjieOutput owns copies of all its strings and of the candidates array; they stay valid
  *    until shanjie_output_free, regardless of later engine_key / engine_reset / engine_set_profile /
  *    engine_load_lm / engine_free calls.
+ *
+ * Return codes: 0 success, 1 a required pointer is NULL, 2 invalid input (data_dir or LM path not
+ * UTF-8, ch not a Unicode scalar, kind / layout / mode / profile out of range), 3 data load failed
+ * (including an unreadable or malformed LM file), 4 internal error (caught panic or decode/encode
+ * error; the engine has already been reset in discard mode). shanjie_engine_load_lm failing leaves the
+ * LM state as it was (no LM, or the previously loaded one).
  *
  * Language model (S2c):
  *  - The default profile is chat. The shell picks the profile from the frontmost app (S3b); the core
@@ -56,6 +62,7 @@ typedef struct {
   uint32_t candidate_columns; // 0 = collapsed single row; > 0 = expanded, always 9 (one row = one page, the selected page on top; s3b2 9)
   uint32_t candidate_first;   // position of candidates[0] in the whole list; 0 when closed
   uint32_t candidate_total;   // length of the whole list; 0 when closed
+  const char *quick_add_prompt; // UTF-8 quick add prompt text shown when the user enters quick add mode (Ctrl+Enter); NULL when not in quick add mode
 } ShanjieOutput;
 typedef struct ShanjieEngine ShanjieEngine;
 

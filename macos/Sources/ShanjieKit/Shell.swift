@@ -182,6 +182,9 @@ public final class Shell {
             let code = e.learningOpen(dir: dir.path)
             learningOpenFailed = code != 0
             if code != 0 { Log.shell.error("shanjie_engine_learning_open failed, code \(code)") }
+            // Open custom vocabulary store.
+            let vocabCode = e.customVocabOpen(dir: dir.path)
+            if vocabCode != 0 { Log.shell.error("shanjie_engine_custom_vocab_open failed, code \(vocabCode)") }
         }
         engine = e
     }
@@ -357,8 +360,20 @@ public final class Session {
     }
 
     /// Section 7: commit first, then the preedit (single underline, caret at cursor_utf16), then
-    /// the candidates.
+    /// the candidates. Also handles quick add prompt display.
     private func apply(_ o: CoreOutput) {
+        // Handle quick add prompt
+        if let prompt = o.quickAddPrompt, !prompt.isEmpty {
+            // Show the quick add prompt as a status message (not marked text)
+            // The prompt is shown in the candidate panel area or as a temporary status
+            Log.shell.debug("quick add prompt: \(prompt)")
+            // Clear the composition and show the prompt
+            shell.composing = false
+            clearMarkedText()
+            shell.hideCandidates()
+            return
+        }
+
         if !o.commit.isEmpty {
             client.insertText(o.commit, replacementRange: NSRange(location: NSNotFound, length: 0))
         }
