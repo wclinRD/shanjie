@@ -119,6 +119,33 @@ int32_t shanjie_engine_learning_clear(ShanjieEngine *engine);
 //   rewrite; cleared only by a successful full rewrite or a successful learning_clear.
 int32_t shanjie_engine_learning_status(ShanjieEngine *engine, uint32_t *flags);
 
+// Custom vocabulary (ChiaKey integration): custom words stored in custom_vocab.tsv.
+// custom_vocab_open: dir is the vocabulary directory (.../Application Support/shanjie); creates it
+//   if missing. 1 when engine or dir is NULL; 2 when dir is not UTF-8; 3 on I/O failure.
+int32_t shanjie_engine_custom_vocab_open(ShanjieEngine *engine, const char *dir);
+// custom_vocab_add: reading_utf8 is a syllable string like "ㄅㄚˇ-ㄅㄚˇ" (reading<TAB>word format);
+//   word_utf8 is the Chinese word. Returns 0 on success, 1 when engine or strings are NULL, 2 when
+//   input is invalid, 3 on I/O failure. The word is saved immediately.
+int32_t shanjie_engine_custom_vocab_add(ShanjieEngine *engine, const char *reading_utf8, const char *word_utf8);
+// custom_vocab_remove: removes a custom word by reading and word. Returns 0 on success, 1 when
+//   engine or strings are NULL, 2 when input is invalid, 3 on I/O failure. The change is saved.
+int32_t shanjie_engine_custom_vocab_remove(ShanjieEngine *engine, const char *reading_utf8, const char *word_utf8);
+// custom_vocab_find: lists custom words for a reading (reading_utf8 like "ㄅㄚˇ-ㄅㄚˇ"). Returns 0 on
+//   success, 1 when engine or pointers are NULL, 2 when input is invalid. Returns an opaque handle
+//   to the custom vocabulary output on success, or NULL on failure. The caller must free the handle
+//   using shanjie_custom_vocab_free(handle).
+typedef struct ShanjieCustomVocabOutput ShanjieCustomVocabOutput;
+int32_t shanjie_engine_custom_vocab_find(ShanjieEngine *engine, const char *reading_utf8, ShanjieCustomVocabOutput **out);
+uint32_t shanjie_custom_vocab_output_count(ShanjieCustomVocabOutput *handle);
+const char *shanjie_custom_vocab_output_word(ShanjieCustomVocabOutput *handle, uint32_t index);
+void    shanjie_custom_vocab_free(ShanjieCustomVocabOutput *handle);
+// import_keykey: imports a Yahoo! KeyKey export file (MJSR version 1.0.0 format). Returns 0 on
+//   success, 1 when engine or path is NULL, 2 when path is not UTF-8, 3 on I/O failure or invalid format.
+int32_t shanjie_engine_custom_vocab_import_keykey(ShanjieEngine *engine, const char *path_utf8);
+// import_cin: imports a .cin table file (CangJie input method format). Returns 0 on success, 1 when
+//   engine or path is NULL, 2 when path is not UTF-8, 3 on I/O failure or invalid format.
+int32_t shanjie_engine_custom_vocab_import_cin(ShanjieEngine *engine, const char *path_utf8);
+
 #ifdef __cplusplus
 }
 #endif

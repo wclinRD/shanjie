@@ -84,8 +84,16 @@ unsafe fn clear_out<T>(out: *mut *mut T) -> bool {
 
 fn to_key(k: ShanjieKey) -> Option<Key> {
     let kind = KeyKind::from_code(k.kind)?;
-    let ch = if kind == KeyKind::Char { char::from_u32(k.ch)? } else { '\0' };
-    Some(Key { kind, ch, modifiers: k.modifiers })
+    let ch = if kind == KeyKind::Char {
+        char::from_u32(k.ch)?
+    } else {
+        '\0'
+    };
+    Some(Key {
+        kind,
+        ch,
+        modifiers: k.modifiers,
+    })
 }
 
 /// Copies an engine output into C-owned memory; `None` when a string holds an interior NUL.
@@ -103,7 +111,11 @@ fn to_c(o: Output) -> Option<*mut ShanjieOutput> {
         preedit: strings[1].as_ptr(),
         cursor_utf16: o.cursor_utf16,
         candidate_count: u32::try_from(ptrs.len()).ok()?,
-        candidates: if ptrs.is_empty() { ptr::null() } else { ptrs.as_ptr() },
+        candidates: if ptrs.is_empty() {
+            ptr::null()
+        } else {
+            ptrs.as_ptr()
+        },
         candidate_selected: match o.selected {
             Some(s) => i32::try_from(s).ok()?,
             None => -1,
@@ -112,7 +124,14 @@ fn to_c(o: Output) -> Option<*mut ShanjieOutput> {
         candidate_first: o.first,
         candidate_total: o.total,
     };
-    Some(Box::into_raw(Box::new(OwnedOutput { out, _strings: strings, _ptrs: ptrs })).cast())
+    Some(
+        Box::into_raw(Box::new(OwnedOutput {
+            out,
+            _strings: strings,
+            _ptrs: ptrs,
+        }))
+        .cast(),
+    )
 }
 
 /// # Safety
@@ -203,7 +222,9 @@ pub unsafe extern "C" fn shanjie_engine_key(
         if !unsafe { clear_out(out) } || engine.is_null() {
             return SHANJIE_ERR_NULL;
         }
-        let Some(k) = to_key(key) else { return SHANJIE_ERR_INVALID };
+        let Some(k) = to_key(key) else {
+            return SHANJIE_ERR_INVALID;
+        };
         // SAFETY: live handle, single-threaded use (§6).
         let e = unsafe { &mut (*engine).0 };
         match e.key(k) {
@@ -294,7 +315,10 @@ pub unsafe extern "C" fn shanjie_engine_reset(
 /// # Safety
 /// `engine` is NULL or a live handle; `path` is NULL or a NUL-terminated string.
 #[no_mangle]
-pub unsafe extern "C" fn shanjie_engine_load_lm(engine: *mut ShanjieEngine, path: *const c_char) -> i32 {
+pub unsafe extern "C" fn shanjie_engine_load_lm(
+    engine: *mut ShanjieEngine,
+    path: *const c_char,
+) -> i32 {
     let rc = guard(|| {
         if engine.is_null() || path.is_null() {
             return SHANJIE_ERR_NULL;
@@ -334,7 +358,9 @@ pub unsafe extern "C" fn shanjie_engine_set_profile(
         if !unsafe { clear_out(out) } || engine.is_null() {
             return SHANJIE_ERR_NULL;
         }
-        let Some(profile) = Profile::from_code(profile) else { return SHANJIE_ERR_INVALID };
+        let Some(profile) = Profile::from_code(profile) else {
+            return SHANJIE_ERR_INVALID;
+        };
         // SAFETY: live handle, single-threaded use (§6).
         let e = unsafe { &mut (*engine).0 };
         match e.set_profile(profile) {
@@ -361,7 +387,10 @@ pub unsafe extern "C" fn shanjie_engine_set_profile(
 /// # Safety
 /// `engine` is NULL or a live handle; `table` is NULL or a NUL-terminated string.
 #[no_mangle]
-pub unsafe extern "C" fn shanjie_engine_set_punctuation(engine: *mut ShanjieEngine, table: *const c_char) -> i32 {
+pub unsafe extern "C" fn shanjie_engine_set_punctuation(
+    engine: *mut ShanjieEngine,
+    table: *const c_char,
+) -> i32 {
     guard(|| {
         if engine.is_null() || table.is_null() {
             return SHANJIE_ERR_NULL;
@@ -372,7 +401,11 @@ pub unsafe extern "C" fn shanjie_engine_set_punctuation(engine: *mut ShanjieEngi
         };
         // SAFETY: live handle, single-threaded use (§6).
         let e = unsafe { &mut (*engine).0 };
-        if e.set_punctuation(table) { SHANJIE_OK } else { SHANJIE_ERR_INVALID }
+        if e.set_punctuation(table) {
+            SHANJIE_OK
+        } else {
+            SHANJIE_ERR_INVALID
+        }
     })
 }
 
@@ -381,7 +414,10 @@ pub unsafe extern "C" fn shanjie_engine_set_punctuation(engine: *mut ShanjieEngi
 /// # Safety
 /// `engine` is NULL or a live handle; `utf8` is NULL or a NUL-terminated string.
 #[no_mangle]
-pub unsafe extern "C" fn shanjie_engine_set_left_context(engine: *mut ShanjieEngine, utf8: *const c_char) -> i32 {
+pub unsafe extern "C" fn shanjie_engine_set_left_context(
+    engine: *mut ShanjieEngine,
+    utf8: *const c_char,
+) -> i32 {
     guard(|| {
         if engine.is_null() {
             return SHANJIE_ERR_NULL;
@@ -409,7 +445,10 @@ pub unsafe extern "C" fn shanjie_engine_set_left_context(engine: *mut ShanjieEng
 /// # Safety
 /// `engine` is NULL or a live handle.
 #[no_mangle]
-pub unsafe extern "C" fn shanjie_engine_set_learning(engine: *mut ShanjieEngine, enabled: u32) -> i32 {
+pub unsafe extern "C" fn shanjie_engine_set_learning(
+    engine: *mut ShanjieEngine,
+    enabled: u32,
+) -> i32 {
     guard(|| {
         if engine.is_null() {
             return SHANJIE_ERR_NULL;
@@ -426,7 +465,10 @@ pub unsafe extern "C" fn shanjie_engine_set_learning(engine: *mut ShanjieEngine,
 /// # Safety
 /// `engine` is NULL or a live handle; `dir` is NULL or a NUL-terminated string.
 #[no_mangle]
-pub unsafe extern "C" fn shanjie_engine_learning_open(engine: *mut ShanjieEngine, dir: *const c_char) -> i32 {
+pub unsafe extern "C" fn shanjie_engine_learning_open(
+    engine: *mut ShanjieEngine,
+    dir: *const c_char,
+) -> i32 {
     guard(|| {
         if engine.is_null() || dir.is_null() {
             return SHANJIE_ERR_NULL;
@@ -460,9 +502,12 @@ pub unsafe extern "C" fn shanjie_engine_learning_clear(engine: *mut ShanjieEngin
 }
 
 /// # Safety
-/// `engine` is NULL or a live handle; `flags` is NULL or writable.
+/// `engine` is NULL or a live handle.
 #[no_mangle]
-pub unsafe extern "C" fn shanjie_engine_learning_status(engine: *mut ShanjieEngine, flags: *mut u32) -> i32 {
+pub unsafe extern "C" fn shanjie_engine_learning_status(
+    engine: *mut ShanjieEngine,
+    flags: *mut u32,
+) -> i32 {
     guard(|| {
         if engine.is_null() || flags.is_null() {
             return SHANJIE_ERR_NULL;
@@ -470,6 +515,274 @@ pub unsafe extern "C" fn shanjie_engine_learning_status(engine: *mut ShanjieEngi
         // SAFETY: live handle; `flags` non-NULL and writable per the caller contract.
         unsafe { *flags = (*engine).0.learning_status() };
         SHANJIE_OK
+    })
+}
+
+/// S4 (custom vocabulary): open the custom vocabulary store in `dir/custom_vocab.tsv`.
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `dir` is NULL or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_open(
+    engine: *mut ShanjieEngine,
+    dir: *const c_char,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || dir.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: non-NULL, NUL-terminated per the caller contract.
+        let Ok(dir) = unsafe { CStr::from_ptr(dir) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        match e.custom_vocab_open(Path::new(dir)) {
+            Ok(()) => SHANJIE_OK,
+            Err(_) => SHANJIE_ERR_LOAD,
+        }
+    })
+}
+
+/// S4 (custom vocabulary): add a custom word (reading<TAB>word).
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `reading_utf8` and `word_utf8` are NUL-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_add(
+    engine: *mut ShanjieEngine,
+    reading_utf8: *const c_char,
+    word_utf8: *const c_char,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || reading_utf8.is_null() || word_utf8.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: NUL-terminated per the caller contract.
+        let Ok(reading) = unsafe { CStr::from_ptr(reading_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let Ok(word) = unsafe { CStr::from_ptr(word_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let reading_vec = reading
+            .split('-')
+            .map(String::from)
+            .collect::<Vec<String>>();
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        if e.custom_vocab_add(reading_vec, word.to_string()) {
+            let _ = e.custom_vocab_save();
+            SHANJIE_OK
+        } else {
+            SHANJIE_ERR_INVALID
+        }
+    })
+}
+
+/// S4 (custom vocabulary): remove a custom word (reading<TAB>word).
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `reading_utf8` and `word_utf8` are NUL-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_remove(
+    engine: *mut ShanjieEngine,
+    reading_utf8: *const c_char,
+    word_utf8: *const c_char,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || reading_utf8.is_null() || word_utf8.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: NUL-terminated per the caller contract.
+        let Ok(reading) = unsafe { CStr::from_ptr(reading_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let Ok(word) = unsafe { CStr::from_ptr(word_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let reading_vec = reading
+            .split('-')
+            .map(String::from)
+            .collect::<Vec<String>>();
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        if e.custom_vocab_remove(reading_vec, word.to_string()) {
+            let _ = e.custom_vocab_save();
+            SHANJIE_OK
+        } else {
+            SHANJIE_ERR_INVALID
+        }
+    })
+}
+
+/// Opaque handle for custom vocabulary output.
+pub struct ShanjieCustomVocabOutput {
+    count: u32,
+    _strings: Vec<CString>,
+    _ptrs: Vec<*const c_char>,
+}
+
+/// S4 (custom vocabulary): list custom words for a reading. Returns an opaque handle on success,
+/// or NULL on failure. The caller must free the handle using `shanjie_custom_vocab_free`.
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `reading_utf8` is NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_find(
+    engine: *mut ShanjieEngine,
+    reading_utf8: *const c_char,
+    out_handle: *mut *mut ShanjieCustomVocabOutput,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || reading_utf8.is_null() || out_handle.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: NUL-terminated per the caller contract.
+        let Ok(reading) = unsafe { CStr::from_ptr(reading_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let reading_vec = reading
+            .split('-')
+            .map(String::from)
+            .collect::<Vec<String>>();
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        let words = e.custom_vocab_find(&reading_vec);
+        let count = words.len() as u32;
+
+        let mut strings = Vec::with_capacity(count as usize);
+        let mut ptrs = Vec::with_capacity(count as usize);
+        for w in words {
+            let cs = CString::new(w.word.as_str()).unwrap();
+            strings.push(cs);
+            ptrs.push(strings.last().unwrap().as_ptr());
+        }
+
+        let owned = Box::into_raw(Box::new(ShanjieCustomVocabOutput {
+            count,
+            _strings: strings,
+            _ptrs: ptrs.clone(),
+        }));
+
+        // SAFETY: `out_handle` is non-NULL and writable per the caller contract.
+        unsafe { *out_handle = owned };
+        SHANJIE_OK
+    })
+}
+
+/// Get the number of words from a custom vocabulary output handle.
+///
+/// # Safety
+/// `handle` is a valid handle from the library or NULL.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_custom_vocab_output_count(
+    handle: *mut ShanjieCustomVocabOutput,
+) -> u32 {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: handle is a valid `ShanjieCustomVocabOutput` from the library.
+    unsafe { (*handle).count }
+}
+
+/// Get a word string by index from a custom vocabulary output handle.
+///
+/// # Safety
+/// `handle` is a valid handle from the library, and `index` is within bounds.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_custom_vocab_output_word(
+    handle: *mut ShanjieCustomVocabOutput,
+    index: u32,
+) -> *const c_char {
+    if handle.is_null() || index >= unsafe { (*handle).count } {
+        return ptr::null();
+    }
+    // SAFETY: handle is a valid `ShanjieCustomVocabOutput` from the library.
+    unsafe { (&(*handle)._ptrs)[index as usize] }
+}
+
+/// Free custom vocabulary output returned by `shanjie_engine_custom_vocab_find`.
+///
+/// # Safety
+/// `handle` is a NULL handle or an opaque handle from the library.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_custom_vocab_free(handle: *mut ShanjieCustomVocabOutput) {
+    if !handle.is_null() {
+        // SAFETY: handle is an allocated `ShanjieCustomVocabOutput` from the library.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// S4 (custom vocabulary): import a Yahoo! KeyKey export file (.keykey or .mjsr).
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `path_utf8` is NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_import_keykey(
+    engine: *mut ShanjieEngine,
+    path_utf8: *const c_char,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || path_utf8.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: NUL-terminated per the caller contract.
+        let Ok(path_str) = unsafe { CStr::from_ptr(path_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let path = Path::new(path_str);
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        match crate::vocab::import_keykey_export(path) {
+            Ok(words) => {
+                let Some(store) = e.custom_vocab_mut() else {
+                    return SHANJIE_ERR_LOAD;
+                };
+                for w in words {
+                    store.add(w.reading, w.word);
+                }
+                let _ = e.custom_vocab_save();
+                SHANJIE_OK
+            }
+            Err(_) => SHANJIE_ERR_LOAD,
+        }
+    })
+}
+
+/// S4 (custom vocabulary): import a .cin table file.
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `path_utf8` is NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_import_cin(
+    engine: *mut ShanjieEngine,
+    path_utf8: *const c_char,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || path_utf8.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: NUL-terminated per the caller contract.
+        let Ok(path_str) = unsafe { CStr::from_ptr(path_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let path = Path::new(path_str);
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        match crate::vocab::import_cin_table(path) {
+            Ok(words) => {
+                let Some(store) = e.custom_vocab_mut() else {
+                    return SHANJIE_ERR_LOAD;
+                };
+                for w in words {
+                    store.add(w.reading, w.word);
+                }
+                let _ = e.custom_vocab_save();
+                SHANJIE_OK
+            }
+            Err(_) => SHANJIE_ERR_LOAD,
+        }
     })
 }
 
@@ -532,11 +845,19 @@ mod tests {
             c.env(DEFAULT_HOOK_ENV, "1");
         }
         let o = c.output().unwrap();
-        (o.status.success(), String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into())
+        (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stdout).into(),
+            String::from_utf8_lossy(&o.stderr).into(),
+        )
     }
 
     fn key(kind: u32, ch: char) -> ShanjieKey {
-        ShanjieKey { kind, ch: ch as u32, modifiers: 0 }
+        ShanjieKey {
+            kind,
+            ch: ch as u32,
+            modifiers: 0,
+        }
     }
     const CHAR: u32 = 1;
     const SPACE: u32 = 2;
@@ -558,7 +879,10 @@ mod tests {
     fn new_engine(dir: &Path, layout: u32) -> *mut ShanjieEngine {
         let c = CString::new(dir.to_str().unwrap()).unwrap();
         let mut e = ptr::null_mut();
-        assert!(unsafe { shanjie_engine_new(c.as_ptr(), layout, &mut e) } == 0, "engine_new");
+        assert!(
+            unsafe { shanjie_engine_new(c.as_ptr(), layout, &mut e) } == 0,
+            "engine_new"
+        );
         e
     }
 
@@ -599,9 +923,15 @@ mod tests {
         let rc = unsafe { shanjie_engine_key(e, key(SPACE, '\0'), &mut o) };
         assert!(rc == 4, "panic maps to code 4");
         assert!(o.is_null(), "out is NULL after a panic");
-        assert!(PAYLOAD.with(|p| p.borrow().contains(MARKER)), "payload carries the marker");
+        assert!(
+            PAYLOAD.with(|p| p.borrow().contains(MARKER)),
+            "payload carries the marker"
+        );
         let (rc, preedit, _) = send(e, key(LEFT, '\0'));
-        assert!(rc == 0 && preedit.is_empty(), "engine was reset after code 4");
+        assert!(
+            rc == 0 && preedit.is_empty(),
+            "engine was reset after code 4"
+        );
         unsafe { shanjie_engine_free(e) };
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -610,19 +940,28 @@ mod tests {
     fn r2_panic_marker_never_reaches_stdout_or_stderr() {
         let (ok, out, err) = run_child("child_panic", false);
         assert!(ok, "quiet child failed");
-        assert!(!out.contains(MARKER) && !err.contains(MARKER), "marker leaked with the silent hook");
+        assert!(
+            !out.contains(MARKER) && !err.contains(MARKER),
+            "marker leaked with the silent hook"
+        );
         assert!(out.contains("1 passed"), "child test actually ran");
         // Positive control: the same child with the default hook must show the marker.
         let (ok, out, err) = run_child("child_panic", true);
         assert!(ok, "default-hook child failed");
         assert!(out.contains("1 passed"), "default-hook child actually ran");
-        assert!(err.contains(MARKER), "positive control: default hook did not print the marker");
+        assert!(
+            err.contains(MARKER),
+            "positive control: default hook did not print the marker"
+        );
     }
 
     // ---- C-ABI replay of the first 20 rows of §7.2 ----
 
     fn root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf()
     }
 
     fn dev_texts() -> Vec<String> {
@@ -632,7 +971,10 @@ mod tests {
             .filter(|p| p.extension().is_some_and(|x| x == "txt"))
             .collect();
         files.sort();
-        files.iter().map(|f| std::fs::read_to_string(f).unwrap()).collect()
+        files
+            .iter()
+            .map(|f| std::fs::read_to_string(f).unwrap())
+            .collect()
     }
 
     fn keys_of(layout: Layout, syl: &str) -> Vec<ShanjieKey> {
@@ -644,7 +986,10 @@ mod tests {
                     v.push(key(CHAR, tk));
                     toned = true;
                 }
-                None => v.push(key(CHAR, layout.key_of_symbol(c).expect("symbol has a key"))),
+                None => v.push(key(
+                    CHAR,
+                    layout.key_of_symbol(c).expect("symbol has a key"),
+                )),
             }
         }
         if !toned {
@@ -674,8 +1019,11 @@ mod tests {
                     Some(s) => s.clone(),
                     None => lex.to_syllables(&r.sent).expect("usable row"),
                 };
-                let want = decode_beam(&lex, &syls, &mut NoLearning, BEAM_S1).unwrap()[0].1.concat();
-                let mut keys: Vec<ShanjieKey> = syls.iter().flat_map(|s| keys_of(layout, s)).collect();
+                let want = decode_beam(&lex, &syls, &mut NoLearning, BEAM_S1).unwrap()[0]
+                    .1
+                    .concat();
+                let mut keys: Vec<ShanjieKey> =
+                    syls.iter().flat_map(|s| keys_of(layout, s)).collect();
                 keys.push(key(ENTER, '\0'));
                 let mut got = String::new();
                 for k in keys {
@@ -701,14 +1049,20 @@ mod tests {
                 || line.starts_with("test result: ok. 1 passed; 0 failed;");
             assert!(harness, "child printed a non-harness line");
         }
-        assert!(all.contains("test ffi::tests::child_replay ... ok"), "child test actually ran");
+        assert!(
+            all.contains("test ffi::tests::child_replay ... ok"),
+            "child test actually ran"
+        );
         assert!(all.is_ascii(), "child printed non-ASCII text");
         // Superset of the 20 rows: every dev sentence and confirmed reading.
         for t in dev_texts() {
             for r in parse_rows(&t).unwrap() {
                 assert!(!all.contains(&r.sent), "sentence leaked");
                 if let Some(s) = &r.reading {
-                    assert!(!all.contains(&s.join(" ")) && !all.contains(&s.concat()), "reading leaked");
+                    assert!(
+                        !all.contains(&s.join(" ")) && !all.contains(&s.concat()),
+                        "reading leaked"
+                    );
                 }
             }
         }
@@ -738,63 +1092,135 @@ mod tests {
 
         // engine_new
         let mut e: *mut ShanjieEngine = sentinel();
-        assert!(unsafe { shanjie_engine_new(dir_c.as_ptr(), 0, ptr::null_mut()) } == 1, "new out NULL");
-        assert!(unsafe { shanjie_engine_new(ptr::null(), 0, &mut e) } == 1 && e.is_null(), "new dir NULL");
+        assert!(
+            unsafe { shanjie_engine_new(dir_c.as_ptr(), 0, ptr::null_mut()) } == 1,
+            "new out NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_new(ptr::null(), 0, &mut e) } == 1 && e.is_null(),
+            "new dir NULL"
+        );
         e = sentinel();
-        assert!(unsafe { shanjie_engine_new(dir_c.as_ptr(), 2, &mut e) } == 2 && e.is_null(), "new layout");
+        assert!(
+            unsafe { shanjie_engine_new(dir_c.as_ptr(), 2, &mut e) } == 2 && e.is_null(),
+            "new layout"
+        );
         e = sentinel();
-        assert!(unsafe { shanjie_engine_new(bad_utf8.as_ptr(), 0, &mut e) } == 2 && e.is_null(), "new non-UTF-8");
+        assert!(
+            unsafe { shanjie_engine_new(bad_utf8.as_ptr(), 0, &mut e) } == 2 && e.is_null(),
+            "new non-UTF-8"
+        );
         e = sentinel();
-        assert!(unsafe { shanjie_engine_new(missing.as_ptr(), 0, &mut e) } == 3 && e.is_null(), "new missing dir");
+        assert!(
+            unsafe { shanjie_engine_new(missing.as_ptr(), 0, &mut e) } == 3 && e.is_null(),
+            "new missing dir"
+        );
         std::fs::remove_file(dir.join("overlay-add.tsv")).unwrap();
         e = sentinel();
-        assert!(unsafe { shanjie_engine_new(dir_c.as_ptr(), 0, &mut e) } == 3 && e.is_null(), "new missing overlay");
+        assert!(
+            unsafe { shanjie_engine_new(dir_c.as_ptr(), 0, &mut e) } == 3 && e.is_null(),
+            "new missing overlay"
+        );
         std::fs::write(dir.join("overlay-add.tsv"), "").unwrap();
         std::fs::remove_file(dir.join("sandhi-add.tsv")).unwrap();
         e = sentinel();
-        assert!(unsafe { shanjie_engine_new(dir_c.as_ptr(), 0, &mut e) } == 3 && e.is_null(), "new missing sandhi-add.tsv");
+        assert!(
+            unsafe { shanjie_engine_new(dir_c.as_ptr(), 0, &mut e) } == 3 && e.is_null(),
+            "new missing sandhi-add.tsv"
+        );
         std::fs::write(dir.join("sandhi-add.tsv"), "").unwrap();
         let e = new_engine(&dir, 0);
 
         // engine_key
         let mut o: *mut ShanjieOutput = sentinel();
-        assert!(unsafe { shanjie_engine_key(e, key(ESC, '\0'), ptr::null_mut()) } == 1, "key out NULL");
-        assert!(unsafe { shanjie_engine_key(ptr::null_mut(), key(ESC, '\0'), &mut o) } == 1 && o.is_null(), "key engine NULL");
+        assert!(
+            unsafe { shanjie_engine_key(e, key(ESC, '\0'), ptr::null_mut()) } == 1,
+            "key out NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_key(ptr::null_mut(), key(ESC, '\0'), &mut o) } == 1
+                && o.is_null(),
+            "key engine NULL"
+        );
         for (kind, ch) in [(0, 0x61), (14, 0x61), (CHAR, 0xD800), (CHAR, 0x110000)] {
             o = sentinel();
-            let k = ShanjieKey { kind, ch, modifiers: 0 };
-            assert!(unsafe { shanjie_engine_key(e, k, &mut o) } == 2 && o.is_null(), "key invalid");
+            let k = ShanjieKey {
+                kind,
+                ch,
+                modifiers: 0,
+            };
+            assert!(
+                unsafe { shanjie_engine_key(e, k, &mut o) } == 2 && o.is_null(),
+                "key invalid"
+            );
         }
         // `ch` is ignored for non-CHAR kinds.
-        assert!(send(e, ShanjieKey { kind: ESC, ch: 0xD800, modifiers: 0 }).0 == 0, "non-CHAR ch ignored");
+        assert!(
+            send(
+                e,
+                ShanjieKey {
+                    kind: ESC,
+                    ch: 0xD800,
+                    modifiers: 0
+                }
+            )
+            .0 == 0,
+            "non-CHAR ch ignored"
+        );
         // Interior NUL -> 4, NULL out, engine discarded.
         for c in ['s', 'u'] {
             assert!(send(e, key(CHAR, c)).0 == 0, "typing");
         }
         o = sentinel();
-        assert!(unsafe { shanjie_engine_key(e, key(CHAR, '3'), &mut o) } == 4 && o.is_null(), "interior NUL");
+        assert!(
+            unsafe { shanjie_engine_key(e, key(CHAR, '3'), &mut o) } == 4 && o.is_null(),
+            "interior NUL"
+        );
         let (rc, preedit, _) = send(e, key(LEFT, '\0'));
         assert!(rc == 0 && preedit.is_empty(), "reset after code 4");
 
         // engine_reset
         o = sentinel();
-        assert!(unsafe { shanjie_engine_reset(e, 0, ptr::null_mut()) } == 1, "reset out NULL");
-        assert!(unsafe { shanjie_engine_reset(ptr::null_mut(), 0, &mut o) } == 1 && o.is_null(), "reset engine NULL");
+        assert!(
+            unsafe { shanjie_engine_reset(e, 0, ptr::null_mut()) } == 1,
+            "reset out NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_reset(ptr::null_mut(), 0, &mut o) } == 1 && o.is_null(),
+            "reset engine NULL"
+        );
         o = sentinel();
-        assert!(unsafe { shanjie_engine_reset(e, 2, &mut o) } == 2 && o.is_null(), "reset mode");
+        assert!(
+            unsafe { shanjie_engine_reset(e, 2, &mut o) } == 2 && o.is_null(),
+            "reset mode"
+        );
 
         // Ownership: an output outlives the engine; candidates NULL when closed.
         for c in ['c', 'l', '3'] {
             assert!(send(e, key(CHAR, c)).0 == 0, "typing");
         }
         o = ptr::null_mut();
-        assert!(unsafe { shanjie_engine_reset(e, 0, &mut o) } == 0, "reset commit");
+        assert!(
+            unsafe { shanjie_engine_reset(e, 0, &mut o) } == 0,
+            "reset commit"
+        );
         unsafe { shanjie_engine_free(e) };
         // SAFETY: test-only read of a live output after the engine is gone.
         unsafe {
-            assert!(CStr::from_ptr((*o).commit).to_bytes() == "好".as_bytes(), "commit survives engine_free");
-            assert!(CStr::from_ptr((*o).preedit).to_bytes().is_empty(), "preedit empty after reset");
-            assert!((*o).candidate_count == 0 && (*o).candidates.is_null() && (*o).candidate_selected == -1, "closed");
+            assert!(
+                CStr::from_ptr((*o).commit).to_bytes() == "好".as_bytes(),
+                "commit survives engine_free"
+            );
+            assert!(
+                CStr::from_ptr((*o).preedit).to_bytes().is_empty(),
+                "preedit empty after reset"
+            );
+            assert!(
+                (*o).candidate_count == 0
+                    && (*o).candidates.is_null()
+                    && (*o).candidate_selected == -1,
+                "closed"
+            );
             shanjie_output_free(o);
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -814,9 +1240,23 @@ mod tests {
         // SAFETY: test-only read of a live output.
         unsafe {
             let n = (*o).candidate_count as usize;
-            let c = (0..n).map(|i| CStr::from_ptr(*(*o).candidates.add(i)).to_str().unwrap().to_string()).collect();
+            let c = (0..n)
+                .map(|i| {
+                    CStr::from_ptr(*(*o).candidates.add(i))
+                        .to_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
             let p = CStr::from_ptr((*o).preedit).to_str().unwrap().to_string();
-            (c, (*o).candidate_selected, (*o).candidate_columns, (*o).candidate_first, (*o).candidate_total, p)
+            (
+                c,
+                (*o).candidate_selected,
+                (*o).candidate_columns,
+                (*o).candidate_first,
+                (*o).candidate_total,
+                p,
+            )
         }
     }
 
@@ -826,7 +1266,9 @@ mod tests {
             return;
         }
         // 60 one-character candidates for ㄋㄧˇ: more than the 45 the grid shows.
-        let base: String = (0..60).map(|i| format!("ㄋㄧˇ {} -1.0\n", char::from_u32(0x4E00 + i).unwrap())).collect();
+        let base: String = (0..60)
+            .map(|i| format!("ㄋㄧˇ {} -1.0\n", char::from_u32(0x4E00 + i).unwrap()))
+            .collect();
         let dir = tiny_dir("pick", base.as_bytes());
         let e = new_engine(&dir, 0);
         let send_out = |k: ShanjieKey| {
@@ -852,13 +1294,24 @@ mod tests {
         }
         assert!(pick(0).0 == 2, "closed");
         let collapsed = send_out(key(SPACE, '\0'));
-        assert!(collapsed.0.len() == 9 && collapsed.2 == 0 && collapsed.3 == 0 && collapsed.4 == 60);
+        assert!(
+            collapsed.0.len() == 9 && collapsed.2 == 0 && collapsed.3 == 0 && collapsed.4 == 60
+        );
         let grid = send_out(key(10, '\0'));
         assert!(grid.0.len() == 45 && grid.2 == 9 && grid.3 == 0 && grid.4 == 60 && grid.1 == 0);
-        assert!(pick(45).0 == 2 && pick(u32::MAX).0 == 2, "outside the output, state unchanged");
+        assert!(
+            pick(45).0 == 2 && pick(u32::MAX).0 == 2,
+            "outside the output, state unchanged"
+        );
         let mut o: *mut ShanjieOutput = sentinel();
-        assert!(unsafe { shanjie_engine_pick(ptr::null_mut(), 0, &mut o) } == 1 && o.is_null(), "engine NULL");
-        assert!(unsafe { shanjie_engine_pick(e, 0, ptr::null_mut()) } == 1, "out NULL");
+        assert!(
+            unsafe { shanjie_engine_pick(ptr::null_mut(), 0, &mut o) } == 1 && o.is_null(),
+            "engine NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_pick(e, 0, ptr::null_mut()) } == 1,
+            "out NULL"
+        );
         // five rows down: row 5, top row 1
         let mut last = grid;
         for _ in 0..5 {
@@ -955,61 +1408,109 @@ mod tests {
         // No LM: unigram; set_profile is remembered but changes nothing yet.
         assert!(type_xin(e) == "鑫", "unigram without LM");
         let (rc, null, handled, preedit, commit) = profile(e, 1);
-        assert!(rc == 0 && !null && handled == 1 && preedit == "鑫" && commit.is_empty(), "profile without LM");
+        assert!(
+            rc == 0 && !null && handled == 1 && preedit == "鑫" && commit.is_empty(),
+            "profile without LM"
+        );
         assert!(profile(e, 0).0 == 0, "back to chat");
         assert!(enter(e) == "鑫", "commit without LM");
 
         // load_lm codes 1, 2, 3; each leaves "no LM".
-        assert!(unsafe { shanjie_engine_load_lm(ptr::null_mut(), lm_c.as_ptr()) } == 1, "load engine NULL");
-        assert!(unsafe { shanjie_engine_load_lm(e, ptr::null()) } == 1, "load path NULL");
-        assert!(unsafe { shanjie_engine_load_lm(e, bad_utf8.as_ptr()) } == 2, "load non-UTF-8");
-        assert!(unsafe { shanjie_engine_load_lm(e, missing_c.as_ptr()) } == 3, "load missing file");
-        assert!(unsafe { shanjie_engine_load_lm(e, garbage_c.as_ptr()) } == 3, "load garbage file");
+        assert!(
+            unsafe { shanjie_engine_load_lm(ptr::null_mut(), lm_c.as_ptr()) } == 1,
+            "load engine NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, ptr::null()) } == 1,
+            "load path NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, bad_utf8.as_ptr()) } == 2,
+            "load non-UTF-8"
+        );
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, missing_c.as_ptr()) } == 3,
+            "load missing file"
+        );
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, garbage_c.as_ptr()) } == 3,
+            "load garbage file"
+        );
         // An engine without data_dir is not reachable through the ABI (only `new` creates engines);
         // the closest case is the overlay vanishing from data_dir after `new`.
         std::fs::rename(dir.join("overlay-add.tsv"), dir.join("overlay.bak")).unwrap();
-        assert!(unsafe { shanjie_engine_load_lm(e, lm_c.as_ptr()) } == 3, "load without overlay");
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, lm_c.as_ptr()) } == 3,
+            "load without overlay"
+        );
         std::fs::rename(dir.join("overlay.bak"), dir.join("overlay-add.tsv")).unwrap();
-        assert!(type_xin(e) == "鑫" && profile(e, 1).3 == "鑫", "failed loads left no LM");
+        assert!(
+            type_xin(e) == "鑫" && profile(e, 1).3 == "鑫",
+            "failed loads left no LM"
+        );
         assert!(profile(e, 0).0 == 0 && enter(e) == "鑫", "still unigram");
 
         // Success: the display is not recomputed by the load itself; the next change uses the LM.
         assert!(send(e, key(CHAR, 'v')).0 == 0, "typing");
-        assert!(unsafe { shanjie_engine_load_lm(e, lm_c.as_ptr()) } == 0, "load ok");
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, lm_c.as_ptr()) } == 0,
+            "load ok"
+        );
         for c in ['u', 'p'] {
             assert!(send(e, key(CHAR, c)).0 == 0, "typing");
         }
         assert!(send(e, key(SPACE, '\0')).1 == "鑫", "chat with LM");
         let (rc, null, handled, preedit, commit) = profile(e, 1);
-        assert!(rc == 0 && !null && handled == 1 && preedit == "心" && commit.is_empty(), "formal snapshot");
+        assert!(
+            rc == 0 && !null && handled == 1 && preedit == "心" && commit.is_empty(),
+            "formal snapshot"
+        );
         assert!(enter(e) == "心", "formal commit");
 
         // A failed load keeps the loaded model.
-        assert!(unsafe { shanjie_engine_load_lm(e, garbage_c.as_ptr()) } == 3, "garbage after success");
+        assert!(
+            unsafe { shanjie_engine_load_lm(e, garbage_c.as_ptr()) } == 3,
+            "garbage after success"
+        );
         assert!(type_xin(e) == "心", "previous LM kept");
 
         // set_profile codes 1, 2 (state unchanged).
         let mut o: *mut ShanjieOutput = sentinel();
-        assert!(unsafe { shanjie_engine_set_profile(e, 0, ptr::null_mut()) } == 1, "profile out NULL");
-        assert!(unsafe { shanjie_engine_set_profile(ptr::null_mut(), 0, &mut o) } == 1 && o.is_null(), "profile engine NULL");
+        assert!(
+            unsafe { shanjie_engine_set_profile(e, 0, ptr::null_mut()) } == 1,
+            "profile out NULL"
+        );
+        assert!(
+            unsafe { shanjie_engine_set_profile(ptr::null_mut(), 0, &mut o) } == 1 && o.is_null(),
+            "profile engine NULL"
+        );
         for p in [2, 7, u32::MAX] {
             let (rc, null, ..) = profile(e, p);
             assert!(rc == 2 && null, "profile out of range");
         }
-        assert!(send(e, key(LEFT, '\0')).1 == "心", "invalid profile changed nothing");
+        assert!(
+            send(e, key(LEFT, '\0')).1 == "心",
+            "invalid profile changed nothing"
+        );
 
         // set_profile code 4 (injected panic): NULL out, composition discarded, LM and profile kept.
         ARMED.with(|a| a.set(true));
         let (rc, null, ..) = profile(e, 1);
         assert!(rc == 4 && null, "panic maps to code 4 with NULL out");
         let (rc, preedit, _) = send(e, key(LEFT, '\0'));
-        assert!(rc == 0 && preedit.is_empty(), "composition discarded after code 4");
+        assert!(
+            rc == 0 && preedit.is_empty(),
+            "composition discarded after code 4"
+        );
         assert!(type_xin(e) == "心", "LM and formal kept after code 4");
 
         // reset keeps LM and profile.
         for mode in [0, 1] {
             let mut o = ptr::null_mut();
-            assert!(unsafe { shanjie_engine_reset(e, mode, &mut o) } == 0, "reset");
+            assert!(
+                unsafe { shanjie_engine_reset(e, mode, &mut o) } == 0,
+                "reset"
+            );
             unsafe { shanjie_output_free(o) };
             assert!(type_xin(e) == "心", "reset keeps LM and profile");
         }
@@ -1023,6 +1524,9 @@ mod tests {
         let (ok, out, err) = run_child("child_lm", false);
         assert!(ok, "LM child failed");
         assert!(out.contains("1 passed"), "child test actually ran");
-        assert!(!out.contains("shanjie-ffi-") && !err.contains("shanjie-ffi-"), "a path leaked");
+        assert!(
+            !out.contains("shanjie-ffi-") && !err.contains("shanjie-ffi-"),
+            "a path leaked"
+        );
     }
 }

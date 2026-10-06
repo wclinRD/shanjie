@@ -4,6 +4,7 @@
 use crate::learn::{context_key, local_day, Learner, Record};
 use crate::learn_store::{LearnStore, Opened, StoreError, JOURNAL_MAX};
 use crate::lm::{decode_segment_learned, CappedLexicon, End, Learn, Lm, Profile};
+use crate::vocab::{CustomWord, VocabStore};
 use crate::{decode_beam, Lexicon, NoLearning, BEAM_S1};
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -32,13 +33,30 @@ const TONE_KEYS_ETEN: [char; 4] = ['2', '3', '4', '1'];
 /// (com.apple.inputmethod.TCIM.Zhuyin), measured 2026-10-05 with a key probe that typed each key into
 /// its own window: ⇧[ 『, ⇧] 』, ⇧\ ｜, ⇧' “, ⇧= ＋, ⇧` ～.
 const SHIFT_PUNCT: [(char, char); 13] = [
-    (',', '，'), ('.', '。'), ('/', '？'), ('1', '！'), (';', '：'),
-    ('[', '『'), (']', '』'), ('9', '（'), ('0', '）'), ('`', '～'),
-    ('\\', '｜'), ('\'', '“'), ('=', '＋'),
+    (',', '，'),
+    ('.', '。'),
+    ('/', '？'),
+    ('1', '！'),
+    (';', '：'),
+    ('[', '『'),
+    (']', '』'),
+    ('9', '（'),
+    ('0', '）'),
+    ('`', '～'),
+    ('\\', '｜'),
+    ('\'', '“'),
+    ('=', '＋'),
 ];
 /// Unshifted key -> punctuation, from the same probe: [ 「, ] 」, \ 、, ' ‘, = ＝, ` ·. Only when the key is
 /// neither a Zhuyin nor a tone key in the current layout (Eten uses ' and = for Zhuyin).
-const PLAIN_PUNCT: [(char, char); 6] = [('[', '「'), (']', '」'), ('\\', '、'), ('\'', '‘'), ('=', '＝'), ('`', '·')];
+const PLAIN_PUNCT: [(char, char); 6] = [
+    ('[', '「'),
+    (']', '」'),
+    ('\\', '、'),
+    ('\'', '‘'),
+    ('=', '＝'),
+    ('`', '·'),
+];
 
 /// s3d §2: punctuation in the composition is a one-cell token under this reserved reading prefix
 /// (`_punct_，`); the lexicon has no such reading. Each one is also a length-1 fixed word.
@@ -68,7 +86,10 @@ const PUNCT_TABLE_MAX_BYTES: usize = 64 * 1024;
 const PUNCT_TABLE_MAX_LINES: usize = 1000;
 
 fn default_punct() -> HashMap<char, Vec<String>> {
-    DEFAULT_PUNCT.iter().map(|(k, v)| (*k, v.iter().map(|s| s.to_string()).collect())).collect()
+    DEFAULT_PUNCT
+        .iter()
+        .map(|(k, v)| (*k, v.iter().map(|s| s.to_string()).collect()))
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -94,11 +115,23 @@ impl Layout {
     pub fn symbol_of(self, key: char) -> Option<(usize, char)> {
         let i = self.keys().chars().position(|c| c == key)?;
         let sym = SYMBOLS.chars().nth(i)?;
-        Some((if i < 21 { 0 } else if i < 24 { 1 } else { 2 }, sym))
+        Some((
+            if i < 21 {
+                0
+            } else if i < 24 {
+                1
+            } else {
+                2
+            },
+            sym,
+        ))
     }
     /// Tone index 1..=4 (marks ˊˇˋ˙) of an unshifted key; space is handled by the caller.
     fn tone_of(self, key: char) -> Option<usize> {
-        self.tone_keys().iter().position(|&c| c == key).map(|i| i + 1)
+        self.tone_keys()
+            .iter()
+            .position(|&c| c == key)
+            .map(|i| i + 1)
     }
     /// Inverse of `symbol_of`, for building key presses from a reading.
     pub fn key_of_symbol(self, sym: char) -> Option<char> {
@@ -107,7 +140,9 @@ impl Layout {
     }
     /// Key of a tone mark (ˊˇˋ˙); `None` for anything else (tone 1 uses the space bar).
     pub fn key_of_tone(self, mark: char) -> Option<char> {
-        let i = TONE_MARKS[1..].iter().position(|m| m.chars().next() == Some(mark))?;
+        let i = TONE_MARKS[1..]
+            .iter()
+            .position(|m| m.chars().next() == Some(mark))?;
         Some(self.tone_keys()[i])
     }
 }
@@ -133,9 +168,11 @@ impl KeyKind {
     /// ABI code (1..=13) to kind.
     pub fn from_code(code: u32) -> Option<KeyKind> {
         use KeyKind::*;
-        [Char, Space, Enter, Backspace, Delete, Esc, Left, Right, Up, Down, Home, End, Tab]
-            .get((code as usize).checked_sub(1)?)
-            .copied()
+        [
+            Char, Space, Enter, Backspace, Delete, Esc, Left, Right, Up, Down, Home, End, Tab,
+        ]
+        .get((code as usize).checked_sub(1)?)
+        .copied()
     }
 }
 
@@ -149,10 +186,18 @@ pub struct Key {
 
 impl Key {
     pub fn new(kind: KeyKind) -> Key {
-        Key { kind, ch: '\0', modifiers: 0 }
+        Key {
+            kind,
+            ch: '\0',
+            modifiers: 0,
+        }
     }
     pub fn ch(ch: char, modifiers: u32) -> Key {
-        Key { kind: KeyKind::Char, ch, modifiers }
+        Key {
+            kind: KeyKind::Char,
+            ch,
+            modifiers,
+        }
     }
 }
 
@@ -211,7 +256,12 @@ struct Cands {
 
 impl Cands {
     fn new(list: Vec<(String, usize)>) -> Cands {
-        Cands { list, sel: 0, expanded: false, top: 0 }
+        Cands {
+            list,
+            sel: 0,
+            expanded: false,
+            top: 0,
+        }
     }
 
     fn scroll(&mut self) {
@@ -270,6 +320,8 @@ pub struct Engine {
     eps_global: f64,
     learner: Learner,
     store: Option<LearnStore>,
+    /// Custom vocabulary (from custom_vocab.tsv).
+    custom_vocab: Option<VocabStore>,
     /// §4 bit0: the last full rewrite failed. Set by a failed full rewrite; cleared only by a
     /// successful full rewrite or clear. While it is set, `must_rewrite` is set too.
     write_failed: bool,
@@ -294,10 +346,15 @@ pub struct Engine {
 /// `overlay-add.tsv` then `sandhi-add.tsv` (S2r: MOE-standard 一/不 readings derived from the base),
 /// in that fixed order; both are required.
 pub fn load_lexicon(data_dir: &Path) -> Result<Arc<Lexicon>, EngineError> {
-    let base = std::fs::read_to_string(data_dir.join("mcbpmf-data.txt")).map_err(|_| EngineError::LoadFailed)?;
-    let overlay = std::fs::read_to_string(data_dir.join("overlay-add.tsv")).map_err(|_| EngineError::LoadFailed)?;
-    let sandhi = std::fs::read_to_string(data_dir.join("sandhi-add.tsv")).map_err(|_| EngineError::LoadFailed)?;
-    Lexicon::parse_with(&base, Some(&join_overlays(overlay, &sandhi))).map(Arc::new).map_err(|_| EngineError::LoadFailed)
+    let base = std::fs::read_to_string(data_dir.join("mcbpmf-data.txt"))
+        .map_err(|_| EngineError::LoadFailed)?;
+    let overlay = std::fs::read_to_string(data_dir.join("overlay-add.tsv"))
+        .map_err(|_| EngineError::LoadFailed)?;
+    let sandhi = std::fs::read_to_string(data_dir.join("sandhi-add.tsv"))
+        .map_err(|_| EngineError::LoadFailed)?;
+    Lexicon::parse_with(&base, Some(&join_overlays(overlay, &sandhi)))
+        .map(Arc::new)
+        .map_err(|_| EngineError::LoadFailed)
 }
 
 /// The overlay text the lexicon is parsed with: `overlay-add.tsv` then `sandhi-add.tsv`, with a line
@@ -342,6 +399,7 @@ impl Engine {
             eps_global: crate::lm::LEARN_EPS_GLOBAL,
             learner: Learner::default(),
             store: None,
+            custom_vocab: None,
             write_failed: false,
             must_rewrite: false,
             last_full: None,
@@ -357,7 +415,11 @@ impl Engine {
     /// §2: keep only the last ≤ 2 consecutive Han characters of `text` (none: empty).
     pub fn set_left_context(&mut self, text: &str) {
         let k = context_key(text);
-        self.left = if k == crate::learn::SENTINEL { String::new() } else { k };
+        self.left = if k == crate::learn::SENTINEL {
+            String::new()
+        } else {
+            k
+        };
     }
 
     /// §3: off by default. Turning it off drops pending learns; a span is learned only if the flag was
@@ -380,6 +442,50 @@ impl Engine {
         self.last_full = None;
         self.appended = 0;
         Ok(opened)
+    }
+
+    /// Open custom vocabulary from `dir/custom_vocab.tsv`. On error the previous custom_vocab stays.
+    pub fn custom_vocab_open(&mut self, dir: &Path) -> Result<(), std::io::Error> {
+        let store = VocabStore::open(dir)?;
+        self.custom_vocab = Some(store);
+        Ok(())
+    }
+
+    /// Add a custom word to the vocabulary store. Returns true if added, false if it already exists.
+    pub fn custom_vocab_add(&mut self, reading: Vec<String>, word: String) -> bool {
+        let Some(store) = &mut self.custom_vocab else {
+            return false;
+        };
+        store.add(reading, word)
+    }
+
+    /// Remove a custom word from the vocabulary store. Returns true if removed, false if not found.
+    pub fn custom_vocab_remove(&mut self, reading: Vec<String>, word: String) -> bool {
+        let Some(store) = &mut self.custom_vocab else {
+            return false;
+        };
+        store.remove(&reading, &word)
+    }
+
+    /// List custom words for a reading.
+    pub fn custom_vocab_find(&self, reading: &[String]) -> Vec<CustomWord> {
+        let Some(store) = &self.custom_vocab else {
+            return Vec::new();
+        };
+        store.find(reading).into_iter().map(|w| w.clone()).collect()
+    }
+
+    /// Save custom vocabulary to disk.
+    pub fn custom_vocab_save(&mut self) -> Result<(), std::io::Error> {
+        let Some(store) = &self.custom_vocab else {
+            return Ok(());
+        };
+        store.save()
+    }
+
+    /// Get a mutable reference to the custom vocabulary store.
+    pub fn custom_vocab_mut(&mut self) -> Option<&mut VocabStore> {
+        self.custom_vocab.as_mut()
     }
 
     /// §4: forget everything: memory, pending learns, files. Memory and pending learns go even when
@@ -443,7 +549,9 @@ impl Engine {
             self.learner.prune(today);
             return;
         };
-        let append_ok = !self.must_rewrite && self.last_full == Some(today) && self.appended + touched.len() < JOURNAL_MAX;
+        let append_ok = !self.must_rewrite
+            && self.last_full == Some(today)
+            && self.appended + touched.len() < JOURNAL_MAX;
         if append_ok && store.append(touched).is_ok() {
             self.appended += touched.len();
             return;
@@ -458,7 +566,11 @@ impl Engine {
         let Some(store) = &self.store else { return };
         self.must_rewrite = true;
         self.learner.prune(today);
-        let r = if forgetting { store.save_forgetting(self.learner.records()) } else { store.save(self.learner.records()) };
+        let r = if forgetting {
+            store.save_forgetting(self.learner.records())
+        } else {
+            store.save(self.learner.records())
+        };
         if r.is_ok() {
             self.must_rewrite = false;
             self.write_failed = false;
@@ -484,11 +596,19 @@ impl Engine {
                 .fixed
                 .iter()
                 .filter_map(|f| {
-                    let pre = f.pre.as_ref().filter(|p| **p != f.word && !self.is_punct(f.start))?;
+                    let pre = f
+                        .pre
+                        .as_ref()
+                        .filter(|p| **p != f.word && !self.is_punct(f.start))?;
                     let off: usize = (0..f.start).map(|i| self.token_width(i)).sum();
                     let before: String = display.chars().take(off).collect();
                     let ctx = context_key(&format!("{}{before}", self.left));
-                    Some((ctx, self.syls[f.start..f.end].to_vec(), f.word.clone(), pre.clone()))
+                    Some((
+                        ctx,
+                        self.syls[f.start..f.end].to_vec(),
+                        f.word.clone(),
+                        pre.clone(),
+                    ))
                 })
                 .collect();
             let mut touched = Vec::new();
@@ -510,10 +630,14 @@ impl Engine {
     /// the next change to it decodes with the new model.
     pub fn load_lm(&mut self, path: &Path) -> Result<(), EngineError> {
         let dir = self.data_dir.as_ref().ok_or(EngineError::LoadFailed)?;
-        let overlay = std::fs::read_to_string(dir.join("overlay-add.tsv")).map_err(|_| EngineError::LoadFailed)?;
+        let overlay = std::fs::read_to_string(dir.join("overlay-add.tsv"))
+            .map_err(|_| EngineError::LoadFailed)?;
         let lm = Lm::load(path).map_err(|_| EngineError::LoadFailed)?;
         let capped = CappedLexicon::new(self.lex.clone(), &overlay, &lm);
-        self.lm = Some(LmState { lm: Arc::new(lm), capped: Arc::new(capped) });
+        self.lm = Some(LmState {
+            lm: Arc::new(lm),
+            capped: Arc::new(capped),
+        });
         Ok(())
     }
 
@@ -532,7 +656,9 @@ impl Engine {
         for line in lines {
             let mut fields = line.split('\t');
             let mut key = fields.next().unwrap_or("").chars();
-            let (Some(mark), None) = (key.next(), key.next()) else { return false };
+            let (Some(mark), None) = (key.next(), key.next()) else {
+                return false;
+            };
             let alts: Vec<String> = fields.map(str::to_string).collect();
             if alts.is_empty() || alts.iter().any(String::is_empty) {
                 return false;
@@ -548,7 +674,10 @@ impl Engine {
         if !self.is_punct(i) {
             return 1;
         }
-        self.fixed.iter().find(|f| f.start == i).map_or(1, |f| f.word.chars().count())
+        self.fixed
+            .iter()
+            .find(|f| f.start == i)
+            .map_or(1, |f| f.word.chars().count())
     }
 
     /// Test-purpose injection for `with_lexicon` engines: a prebuilt model and its capped lexicon
@@ -590,12 +719,22 @@ impl Engine {
             prev = w;
             any = true;
         }
-        any.then(|| if prev == "<s>" { total } else { total + st.lm.eos(lam, prev) })
+        any.then(|| {
+            if prev == "<s>" {
+                total
+            } else {
+                total + st.lm.eos(lam, prev)
+            }
+        })
     }
 
     /// §6 reset: Commit returns the display string (pending syllable dropped); both clear everything.
     pub fn reset(&mut self, mode: ResetMode) -> Output {
-        let commit = if mode == ResetMode::Commit { std::mem::take(&mut self.display) } else { String::new() };
+        let commit = if mode == ResetMode::Commit {
+            std::mem::take(&mut self.display)
+        } else {
+            String::new()
+        };
         self.clear_all();
         self.view(true, commit)
     }
@@ -628,7 +767,10 @@ impl Engine {
         let chars: Vec<char> = self.display.chars().collect();
         // A syllable shows as one char (lexicon invariant); a punctuation token as its fixed word,
         // which can be longer (⋯⋯, s3e §3). Clamped in case the invariant ever breaks.
-        let at = (0..self.cursor).map(|i| self.token_width(i)).sum::<usize>().min(chars.len());
+        let at = (0..self.cursor)
+            .map(|i| self.token_width(i))
+            .sum::<usize>()
+            .min(chars.len());
         let pending = self.pending();
         let mut preedit: String = chars[..at].iter().collect();
         preedit.push_str(&pending);
@@ -637,13 +779,32 @@ impl Engine {
         let (candidates, selected, columns, first, total) = match &self.cands {
             Some(c) => {
                 let (first, n) = c.window();
-                let list = c.list[first..first + n].iter().map(|(w, _)| w.clone()).collect();
+                let list = c.list[first..first + n]
+                    .iter()
+                    .map(|(w, _)| w.clone())
+                    .collect();
                 let columns = if c.expanded { PAGE_SIZE as u32 } else { 0 };
-                (list, Some(c.sel - first), columns, first as u32, c.list.len() as u32)
+                (
+                    list,
+                    Some(c.sel - first),
+                    columns,
+                    first as u32,
+                    c.list.len() as u32,
+                )
             }
             None => (Vec::new(), None, 0, 0, 0),
         };
-        Output { handled, commit, preedit, cursor_utf16, candidates, selected, columns, first, total }
+        Output {
+            handled,
+            commit,
+            preedit,
+            cursor_utf16,
+            candidates,
+            selected,
+            columns,
+            first,
+            total,
+        }
     }
 
     /// Recompute the display string: free segments decoded top-1, fixed words in between (§3.1).
@@ -653,7 +814,7 @@ impl Engine {
         }
         let mut out = String::new();
         let mut pos = 0;
-        let seg =|from: usize, to: usize, out: &mut String| -> Result<(), EngineError> {
+        let seg = |from: usize, to: usize, out: &mut String| -> Result<(), EngineError> {
             if from < to {
                 let best = decode_beam(&self.lex, &self.syls[from..to], &mut NoLearning, BEAM_S1)
                     .map_err(|_| EngineError::Internal)?;
@@ -677,14 +838,20 @@ impl Engine {
     fn refresh_lm(&mut self, st: &LmState) -> Result<(), EngineError> {
         let lam = self.profile.lambda();
         // The clock (a libc time conversion) is read only when a record could use it.
-        let today = if self.learner.is_empty() { 0 } else { self.today() };
+        let today = if self.learner.is_empty() {
+            0
+        } else {
+            self.today()
+        };
         let mut lp_fixed = Vec::with_capacity(self.fixed.len());
         for f in &self.fixed {
             // Punctuation has no reading in the lexicon; 0.0 only keeps `path` aligned (s3d §4).
             lp_fixed.push(if self.is_punct(f.start) {
                 0.0
             } else {
-                st.capped.best_lp(&self.syls[f.start..f.end], &f.word).ok_or(EngineError::Internal)?
+                st.capped
+                    .best_lp(&self.syls[f.start..f.end], &f.word)
+                    .ok_or(EngineError::Internal)?
             });
         }
         let (mut out, mut path) = (String::new(), Vec::new());
@@ -699,13 +866,28 @@ impl Engine {
                     _ => "<s>",
                 };
                 let end = match right {
-                    Some(f) if !self.is_punct(f.start) => End::Next { word: &f.word, lp: lp_fixed[gap] },
+                    Some(f) if !self.is_punct(f.start) => End::Next {
+                        word: &f.word,
+                        lp: lp_fixed[gap],
+                    },
                     _ => End::Eos,
                 };
                 let before = format!("{}{out}", self.left);
-                let learn = (!self.learner.is_empty()).then(|| Learn { learner: &self.learner, before: &before, today, eps_global: self.eps_global });
+                let learn = (!self.learner.is_empty()).then(|| Learn {
+                    learner: &self.learner,
+                    before: &before,
+                    today,
+                    eps_global: self.eps_global,
+                });
                 let best = decode_segment_learned(
-                    &st.capped, &self.syls[from..to], &st.lm, lam, prev, end, BEAM_S1, learn.as_ref(),
+                    &st.capped,
+                    &self.syls[from..to],
+                    &st.lm,
+                    lam,
+                    prev,
+                    end,
+                    BEAM_S1,
+                    learn.as_ref(),
                 )
                 .map_err(|_| EngineError::Internal)?;
                 for (w, lp) in &best.first().ok_or(EngineError::Internal)?.1 {
@@ -747,16 +929,27 @@ impl Engine {
         }
         let ctrl_bs = is_char && k.ch == '\\' && m == MOD_CONTROL;
         // 1: pass through, no state change.
-        if m & (MOD_OPTION | MOD_COMMAND | MOD_CAPSLOCK) != 0 || (m & MOD_CONTROL != 0 && !ctrl_bs) {
+        if m & (MOD_OPTION | MOD_COMMAND | MOD_CAPSLOCK) != 0 || (m & MOD_CONTROL != 0 && !ctrl_bs)
+        {
             return self.passthrough(String::new());
         }
         // 2: punctuation.
         let punct = if ctrl_bs {
             Some('、')
         } else if is_char && m == MOD_SHIFT {
-            SHIFT_PUNCT.iter().find(|(c, _)| *c == k.ch).map(|(_, p)| *p)
-        } else if is_char && m == 0 && self.layout.symbol_of(k.ch).is_none() && self.layout.tone_of(k.ch).is_none() {
-            PLAIN_PUNCT.iter().find(|(c, _)| *c == k.ch).map(|(_, p)| *p)
+            SHIFT_PUNCT
+                .iter()
+                .find(|(c, _)| *c == k.ch)
+                .map(|(_, p)| *p)
+        } else if is_char
+            && m == 0
+            && self.layout.symbol_of(k.ch).is_none()
+            && self.layout.tone_of(k.ch).is_none()
+        {
+            PLAIN_PUNCT
+                .iter()
+                .find(|(c, _)| *c == k.ch)
+                .map(|(_, p)| *p)
         } else {
             None
         };
@@ -772,7 +965,11 @@ impl Engine {
         if self.cands.is_some() && self.candidate_key(k)? {
             return self.handled();
         }
-        let zy = if is_char && plain { self.layout.symbol_of(k.ch) } else { None };
+        let zy = if is_char && plain {
+            self.layout.symbol_of(k.ch)
+        } else {
+            None
+        };
         let tone = match k.kind {
             KeyKind::Space => Some(0),
             KeyKind::Char if plain => self.layout.tone_of(k.ch),
@@ -845,7 +1042,9 @@ impl Engine {
     /// Rules 3-8 (s3a §3, s3b2 §8.2). `Ok(true)` = consumed; `Ok(false)` = candidates closed, key
     /// continues at rule 9.
     fn candidate_key(&mut self, k: Key) -> Result<bool, EngineError> {
-        let Some(c) = &mut self.cands else { return Ok(false) };
+        let Some(c) = &mut self.cands else {
+            return Ok(false);
+        };
         let (len, sel, cols) = (c.list.len(), c.sel, PAGE_SIZE);
         let digit = (k.kind == KeyKind::Char && k.modifiers == 0 && ('1'..='9').contains(&k.ch))
             .then(|| k.ch as usize - '1' as usize);
@@ -916,7 +1115,9 @@ impl Engine {
     /// s3b2 §8.2 mouse pick: `index` is a position in the last output's `candidates`. `Ok(None)` when
     /// the candidates are closed or `index` is outside that output (state unchanged).
     pub fn pick(&mut self, index: usize) -> Result<Option<Output>, EngineError> {
-        let Some(c) = &self.cands else { return Ok(None) };
+        let Some(c) = &self.cands else {
+            return Ok(None);
+        };
         let (first, n) = c.window();
         if index >= n {
             return Ok(None);
@@ -943,7 +1144,11 @@ impl Engine {
 
     /// Insert one token (a syllable, or punctuation with its fixed word) at the cursor, shift the
     /// fixed words on its right, recompute; at MAX_SYLLABLES tokens commit everything (s3d §1).
-    fn insert_token(&mut self, reading: String, fixed_word: Option<String>) -> Result<Output, EngineError> {
+    fn insert_token(
+        &mut self,
+        reading: String,
+        fixed_word: Option<String>,
+    ) -> Result<Output, EngineError> {
         let c = self.cursor;
         self.fixed.retain_mut(|f| {
             if f.end <= c {
@@ -958,7 +1163,12 @@ impl Engine {
         });
         self.syls.insert(c, reading);
         if let Some(word) = fixed_word {
-            self.fixed.push(Fixed { start: c, end: c + 1, word, pre: None });
+            self.fixed.push(Fixed {
+                start: c,
+                end: c + 1,
+                word,
+                pre: None,
+            });
             self.fixed.sort_by_key(|f| f.start);
         }
         self.cursor += 1;
@@ -996,7 +1206,9 @@ impl Engine {
     fn open_candidates(&mut self) {
         let a = self.cursor;
         let avail = if a == 0 {
-            (0..self.syls.len()).take_while(|&i| !self.is_punct(i)).count()
+            (0..self.syls.len())
+                .take_while(|&i| !self.is_punct(i))
+                .count()
         } else {
             (0..a).rev().take_while(|&i| !self.is_punct(i)).count()
         };
@@ -1007,7 +1219,12 @@ impl Engine {
         let touching = if a == 0 { 0 } else { a - 1 };
         if avail == 0 && touching < self.syls.len() && self.is_punct(touching) {
             let typed = self.syls[touching][PUNCT_PREFIX.len()..].to_string();
-            let alts = typed.chars().next().and_then(|c| self.punct.get(&c)).cloned().unwrap_or_default();
+            let alts = typed
+                .chars()
+                .next()
+                .and_then(|c| self.punct.get(&c))
+                .cloned()
+                .unwrap_or_default();
             let mut listed = HashSet::new();
             for w in std::iter::once(typed).chain(alts) {
                 if listed.insert(w.clone()) {
@@ -1018,7 +1235,11 @@ impl Engine {
             return;
         }
         for l in (1..=self.lex.max_len.min(avail)).rev() {
-            let key = if a == 0 { &self.syls[..l] } else { &self.syls[a - l..a] };
+            let key = if a == 0 {
+                &self.syls[..l]
+            } else {
+                &self.syls[a - l..a]
+            };
             for (w, _) in self.lex.entries(key) {
                 if seen.insert(w) {
                     list.push((w.to_string(), l));
@@ -1036,7 +1257,11 @@ impl Engine {
         if self.is_punct(start) {
             return None;
         }
-        if let Some(f) = self.fixed.iter().find(|f| f.start == start && f.end == end && f.pre.is_some()) {
+        if let Some(f) = self
+            .fixed
+            .iter()
+            .find(|f| f.start == start && f.end == end && f.pre.is_some())
+        {
             return f.pre.clone();
         }
         let off: usize = (0..start).map(|i| self.token_width(i)).sum();
@@ -1050,8 +1275,14 @@ impl Engine {
     /// first, so a panic or failure part way makes the next write a full rewrite too.
     fn forget_highlighted(&mut self) -> Result<(), EngineError> {
         let Some(c) = &self.cands else { return Ok(()) };
-        let Some((word, l)) = c.list.get(c.sel).cloned() else { return Ok(()) };
-        let (start, end) = if self.cursor == 0 { (0, l) } else { (self.cursor - l, self.cursor) };
+        let Some((word, l)) = c.list.get(c.sel).cloned() else {
+            return Ok(());
+        };
+        let (start, end) = if self.cursor == 0 {
+            (0, l)
+        } else {
+            (self.cursor - l, self.cursor)
+        };
         if self.is_punct(start) {
             return Ok(());
         }
@@ -1076,12 +1307,25 @@ impl Engine {
 
     /// Fix candidate `idx` over its range, close candidates, recompute.
     fn choose(&mut self, idx: usize) -> Result<(), EngineError> {
-        let Some(c) = self.cands.take() else { return Ok(()) };
-        let Some((word, l)) = c.list.get(idx).cloned() else { return Ok(()) };
-        let (start, end) = if self.cursor == 0 { (0, l) } else { (self.cursor - l, self.cursor) };
+        let Some(c) = self.cands.take() else {
+            return Ok(());
+        };
+        let Some((word, l)) = c.list.get(idx).cloned() else {
+            return Ok(());
+        };
+        let (start, end) = if self.cursor == 0 {
+            (0, l)
+        } else {
+            (self.cursor - l, self.cursor)
+        };
         let pre = self.learning.then(|| self.pre_pick(start, end)).flatten();
         self.fixed.retain(|f| !(f.start < end && start < f.end));
-        self.fixed.push(Fixed { start, end, word, pre });
+        self.fixed.push(Fixed {
+            start,
+            end,
+            word,
+            pre,
+        });
         self.fixed.sort_by_key(|f| f.start);
         self.refresh()
     }

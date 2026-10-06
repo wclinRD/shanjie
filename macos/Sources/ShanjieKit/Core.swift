@@ -70,6 +70,52 @@ final class CoreEngine {
         return shanjie_engine_learning_status(handle, &flags) == 0 ? flags : nil
     }
 
+    // Custom vocabulary (ChiaKey integration)
+
+    func customVocabOpen(dir: String) -> Int32 { shanjie_engine_custom_vocab_open(handle, dir) }
+
+    func customVocabAdd(reading: String, word: String) -> Int32 {
+        return reading.withCString { readingPtr in
+            word.withCString { wordPtr in
+                shanjie_engine_custom_vocab_add(handle, readingPtr, wordPtr)
+            }
+        }
+    }
+
+    func customVocabRemove(reading: String, word: String) -> Int32 {
+        return reading.withCString { readingPtr in
+            word.withCString { wordPtr in
+                shanjie_engine_custom_vocab_remove(handle, readingPtr, wordPtr)
+            }
+        }
+    }
+
+    func customVocabFind(reading: String) -> [String] {
+        var outHandle: OpaquePointer?
+        let code = shanjie_engine_custom_vocab_find(handle, reading, &outHandle)
+        guard code == 0, let outHandle else {
+            return []
+        }
+        defer { shanjie_custom_vocab_free(outHandle) }
+
+        let count = Int(shanjie_custom_vocab_output_count(outHandle))
+        var words: [String] = []
+        for i in 0..<count {
+            if let wordPtr = shanjie_custom_vocab_output_word(outHandle, UInt32(i)) {
+                words.append(String(cString: wordPtr))
+            }
+        }
+        return words
+    }
+
+    func customVocabImportKeykey(path: String) -> Int32 {
+        return path.withCString { shanjie_engine_custom_vocab_import_keykey(handle, $0) }
+    }
+
+    func customVocabImportCin(path: String) -> Int32 {
+        return path.withCString { shanjie_engine_custom_vocab_import_cin(handle, $0) }
+    }
+
     func key(_ key: ShanjieKey) -> CoreResult {
         var out: UnsafeMutablePointer<ShanjieOutput>?
         return Self.take(shanjie_engine_key(handle, key, &out), out)
