@@ -362,15 +362,30 @@ public final class Session {
     /// Section 7: commit first, then the preedit (single underline, caret at cursor_utf16), then
     /// the candidates. Also handles quick add prompt display.
     private func apply(_ o: CoreOutput) {
-        // Handle quick add prompt
+        // Handle quick add prompt: show the prompt while keeping the composition visible
         if let prompt = o.quickAddPrompt, !prompt.isEmpty {
             // Show the quick add prompt as a status message (not marked text)
             // The prompt is shown in the candidate panel area or as a temporary status
             Log.shell.debug("quick add prompt: \(prompt)")
-            // Clear the composition and show the prompt
-            shell.composing = false
-            clearMarkedText()
-            shell.hideCandidates()
+            // Keep the composition and candidates visible while showing the prompt
+            if !o.preedit.isEmpty {
+                let marked = NSAttributedString(
+                    string: o.preedit, attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue])
+                client.setMarkedText(marked, selectionRange: NSRange(location: o.cursorUTF16, length: 0))
+                shell.composing = true
+            }
+            if !o.candidates.isEmpty {
+                let cursor = Int(o.cursorUTF16)
+                let rect: NSRect?
+                if let c = shell.lineCache, c.preedit == o.preedit, c.cursor == cursor {
+                    rect = c.rect
+                } else {
+                    rect = client.lineRect(cursor: cursor)
+                    shell.lineCache = (o.preedit, cursor, rect)
+                }
+                shell.showCandidates(o.candidates, selected: o.selected, columns: o.columns, first: o.first, total: o.total,
+                                     lineRect: rect)
+            }
             return
         }
 

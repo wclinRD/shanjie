@@ -1023,8 +1023,10 @@ impl Engine {
             }
         }
         let ctrl_bs = is_char && k.ch == '\\' && m == MOD_CONTROL;
-        // Enter quick add mode: Ctrl+Enter (modifiers & MOD_CONTROL != 0 AND key is Enter)
-        if k.kind == KeyKind::Enter && m & MOD_CONTROL != 0 {
+        // Enter quick add mode: Ctrl+Enter OR Shift+Left (modifiers & MOD_SHIFT != 0 AND key is Left)
+        if (k.kind == KeyKind::Enter && m & MOD_CONTROL != 0)
+            || (k.kind == KeyKind::Left && m & MOD_SHIFT != 0)
+        {
             let _ = self.enter_quick_add();
             return Ok(self.view(true, String::new()));
         }
@@ -1607,5 +1609,51 @@ mod quick_add_tests {
         let store = VocabStore::open(&d).unwrap();
         assert_eq!(store.words().len(), 1);
         assert_eq!(store.words()[0].word, "鑫");
+    }
+
+    #[test]
+    fn test_quick_add_shift_left_arrow() {
+        let data = Lexicon::parse("ㄒㄧㄣ 鑫 -1.0\n").unwrap();
+        let mut engine = Engine::with_lexicon(Arc::new(data), Layout::Standard);
+        // Type some characters to create a composition
+        let key_v = Key {
+            kind: KeyKind::Char,
+            ch: 'v',
+            modifiers: 0,
+        };
+        let key_u = Key {
+            kind: KeyKind::Char,
+            ch: 'u',
+            modifiers: 0,
+        };
+        let key_p = Key {
+            kind: KeyKind::Char,
+            ch: 'p',
+            modifiers: 0,
+        };
+        let key_space = Key {
+            kind: KeyKind::Space,
+            ch: '\0',
+            modifiers: 0,
+        };
+        let _ = engine.key(key_v);
+        let _ = engine.key(key_u);
+        let _ = engine.key(key_p);
+        let _ = engine.key(key_space);
+
+        // Enter quick add mode with Shift+Left Arrow
+        let shift_left = Key {
+            kind: KeyKind::Left,
+            ch: '\0',
+            modifiers: MOD_SHIFT,
+        };
+        let out = engine.key(shift_left).unwrap();
+        assert!(out.handled, "Shift+Left Arrow should be handled");
+        assert_eq!(
+            out.quick_add_prompt,
+            Some("正在選取字詞組：鑫，請按 ENTER 鍵加入資料庫".to_string())
+        );
+        assert!(engine.is_quick_add_mode(), "Should be in quick add mode");
+        assert_eq!(engine.quick_add_text(), "鑫");
     }
 }
