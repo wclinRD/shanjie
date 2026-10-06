@@ -146,6 +146,11 @@ int32_t shanjie_engine_custom_vocab_find(ShanjieEngine *engine, const char *read
 uint32_t shanjie_custom_vocab_output_count(ShanjieCustomVocabOutput *handle);
 const char *shanjie_custom_vocab_output_word(ShanjieCustomVocabOutput *handle, uint32_t index);
 void    shanjie_custom_vocab_free(ShanjieCustomVocabOutput *handle);
+// custom_vocab_list_all: lists all custom vocabulary words. Returns 0 on success, 1 when engine or
+//   pointers are NULL. Returns an opaque handle to the custom vocabulary output on success, or NULL
+//   on failure. The caller must free the handle using shanjie_custom_vocab_free(handle).
+int32_t shanjie_engine_custom_vocab_list_all(ShanjieEngine *engine, ShanjieCustomVocabOutput **out);
+
 // import_keykey: imports a Yahoo! KeyKey export file (MJSR version 1.0.0 format). Returns 0 on
 //   success, 1 when engine or path is NULL, 2 when path is not UTF-8, 3 on I/O failure or invalid format.
 int32_t shanjie_engine_custom_vocab_import_keykey(ShanjieEngine *engine, const char *path_utf8);

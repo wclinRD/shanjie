@@ -11,10 +11,11 @@ public final class VocabularyManager: NSObject {
     public let window: NSWindow
     private let tableView: NSTableView
     private let addTextField: NSTextField
+    private let wordField: NSTextField
     private let addButton: NSButton
     private let removeButton: NSButton
 
-    init(engine: CoreEngine) {
+    internal init(engine: CoreEngine) {
         self.engine = engine
 
         let contentRect = NSRect(x: 0, y: 0, width: 480, height: 400)
@@ -45,13 +46,13 @@ public final class VocabularyManager: NSObject {
         addTextField.isBezeled = true
         addTextField.drawsBackground = true
 
-        let wordField = NSTextField(frame: NSRect(x: 270, y: 0, width: 140, height: 28))
-        wordField.placeholderString = "詞彙 (例如：把手)"
-        wordField.isBezeled = true
-        wordField.drawsBackground = true
+        self.wordField = NSTextField(frame: NSRect(x: 270, y: 0, width: 140, height: 28))
+        self.wordField.placeholderString = "詞彙 (例如：把手)"
+        self.wordField.isBezeled = true
+        self.wordField.drawsBackground = true
 
         addRow.addArrangedSubview(addTextField)
-        addRow.addArrangedSubview(wordField)
+        addRow.addArrangedSubview(self.wordField)
 
         self.addButton = NSButton(frame: NSRect(x: 320, y: 16, width: 80, height: 28))
         self.addButton.title = "新增"
@@ -81,15 +82,14 @@ public final class VocabularyManager: NSObject {
     @objc func addWord() {
         let reading = addTextField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reading.isEmpty else { return }
-        let wordField = addTextField.superview?.subviews[1] as? NSTextField
-        let word = wordField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let word = self.wordField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !word.isEmpty else { return }
 
         let code = engine.customVocabAdd(reading: reading, word: word)
         if code == 0 {
             loadWords()
             addTextField.stringValue = ""
-            (addTextField.superview?.subviews[1] as? NSTextField)?.stringValue = ""
+            self.wordField.stringValue = ""
         } else {
             showErrorMessage("新增失敗：詞彙已存在或格式錯誤")
         }
@@ -107,8 +107,8 @@ public final class VocabularyManager: NSObject {
 
     private func loadWords() {
         // Load from engine (custom_vocab.tsv)
-        // The engine returns words for a specific reading; we need to fetch all.
-        // For now, just show the loaded words from the tableView's data source.
+        self.words = self.engine.customVocabListAll()
+        self.tableView.reloadData()
     }
 
     private func showErrorMessage(_ message: String) {

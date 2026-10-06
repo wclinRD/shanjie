@@ -633,6 +633,7 @@ pub unsafe extern "C" fn shanjie_engine_custom_vocab_remove(
 pub struct ShanjieCustomVocabOutput {
     count: u32,
     _strings: Vec<CString>,
+    /// Each entry is "reading\tword"
     _ptrs: Vec<*const c_char>,
 }
 
@@ -668,6 +669,48 @@ pub unsafe extern "C" fn shanjie_engine_custom_vocab_find(
         let mut ptrs = Vec::with_capacity(count as usize);
         for w in words {
             let cs = CString::new(w.word.as_str()).unwrap();
+            strings.push(cs);
+            ptrs.push(strings.last().unwrap().as_ptr());
+        }
+
+        let owned = Box::into_raw(Box::new(ShanjieCustomVocabOutput {
+            count,
+            _strings: strings,
+            _ptrs: ptrs.clone(),
+        }));
+
+        // SAFETY: `out_handle` is non-NULL and writable per the caller contract.
+        unsafe { *out_handle = owned };
+        SHANJIE_OK
+    })
+}
+
+/// S4 (custom vocabulary): list all custom vocabulary words. Returns an opaque handle on success,
+/// or NULL on failure. The caller must free the handle using `shanjie_custom_vocab_free`.
+/// Each returned string is "reading\tword".
+///
+/// # Safety
+/// `engine` is NULL or a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_custom_vocab_list_all(
+    engine: *mut ShanjieEngine,
+    out_handle: *mut *mut ShanjieCustomVocabOutput,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || out_handle.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        let words = e.custom_vocab_list_all();
+        let count = words.len() as u32;
+
+        let mut strings = Vec::with_capacity(count as usize);
+        let mut ptrs = Vec::with_capacity(count as usize);
+        for w in words {
+            let reading_str = w.reading.join("-");
+            let full = format!("{}\t{}", reading_str, w.word);
+            let cs = CString::new(full).unwrap();
             strings.push(cs);
             ptrs.push(strings.last().unwrap().as_ptr());
         }

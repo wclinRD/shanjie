@@ -110,6 +110,29 @@ final class CoreEngine {
         return words
     }
 
+    func customVocabListAll() -> [(reading: String, word: String)] {
+        var outHandle: OpaquePointer?
+        let code = shanjie_engine_custom_vocab_list_all(handle, &outHandle)
+        guard code == 0, let outHandle else {
+            return []
+        }
+        defer { shanjie_custom_vocab_free(outHandle) }
+
+        let count = Int(shanjie_custom_vocab_output_count(outHandle))
+        var words: [(reading: String, word: String)] = []
+        for i in 0..<count {
+            if let pairPtr = shanjie_custom_vocab_output_word(outHandle, UInt32(i)) {
+                let pair = String(cString: pairPtr)
+                if let tabIndex = pair.firstIndex(of: "\t") {
+                    let reading = String(pair[..<tabIndex])
+                    let word = String(pair[(pair.index(after: tabIndex))...])
+                    words.append((reading: reading, word: word))
+                }
+            }
+        }
+        return words
+    }
+
     func customVocabImportKeykey(path: String) -> Int32 {
         return path.withCString { shanjie_engine_custom_vocab_import_keykey(handle, $0) }
     }

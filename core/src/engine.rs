@@ -483,6 +483,14 @@ impl Engine {
         store.find(reading).into_iter().map(|w| w.clone()).collect()
     }
 
+    /// List all custom vocabulary words.
+    pub fn custom_vocab_list_all(&self) -> Vec<CustomWord> {
+        let Some(store) = &self.custom_vocab else {
+            return Vec::new();
+        };
+        store.words().to_vec()
+    }
+
     /// Save custom vocabulary to disk.
     pub fn custom_vocab_save(&mut self) -> Result<(), std::io::Error> {
         let Some(store) = &self.custom_vocab else {

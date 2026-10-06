@@ -70,6 +70,7 @@ final class ShanjieInputController: IMKInputController {
         case .clear: #selector(clearLearning(_:))
         case .toggleBackup: #selector(toggleLearningBackup(_:))
         case .about: #selector(showAbout(_:))
+        case .customVocabulary: #selector(showCustomVocabulary(_:))
         }
     }
 
@@ -82,6 +83,7 @@ final class ShanjieInputController: IMKInputController {
     @objc func clearLearning(_ sender: Any?) { perform(.clear) }
     @objc func toggleLearningBackup(_ sender: Any?) { perform(.toggleBackup) }
     @objc func showAbout(_ sender: Any?) { perform(.about) }
+    @objc func showCustomVocabulary(_ sender: Any?) { perform(.customVocabulary) }
 }
 
 /// The controller's current IMKTextInput client.

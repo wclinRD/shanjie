@@ -226,6 +226,13 @@ public final class Shell {
         composing = false
         hideCandidates()
     }
+
+    /// Shows the custom vocabulary manager window.
+    func showVocabularyManager() {
+        guard let engine = self.engine else { return }
+        let manager = VocabularyManager(engine: engine)
+        manager.window.orderFrontRegardless()
+    }
 }
 
 /// One IMK controller's view of the shell: its client. The app's IMKInputController forwards

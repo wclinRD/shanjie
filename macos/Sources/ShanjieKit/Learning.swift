@@ -49,6 +49,7 @@ public struct MenuEntry: Equatable, Sendable {
         case clear
         case toggleBackup
         case about
+        case customVocabulary
     }
 
     public var title: String
@@ -180,6 +181,7 @@ extension Session {
         items.append(MenuEntry(title: "倚天鍵盤", action: .layout(.eten), checked: layout == .eten))
         items.append(MenuEntry(title: T.clear, action: .clear))
         items.append(MenuEntry(title: T.excludeBackup, action: .toggleBackup, checked: shell.backupExcluded))
+        items.append(MenuEntry(title: "自訂詞庫…", action: .customVocabulary))
         if shell.learningUnavailable { items.append(MenuEntry(title: T.unavailable)) }
         items.append(MenuEntry(title: "關於善解輸入法", action: .about))
         return items
@@ -197,6 +199,8 @@ extension Session {
             shell.setBackupExcluded(!shell.backupExcluded)
         case .about:
             shell.dialogs.about()
+        case .customVocabulary:
+            shell.showVocabularyManager()
         }
     }
 }
