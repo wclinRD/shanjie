@@ -27,6 +27,16 @@ enum CoreResult {
     case failed(Int32)
 }
 
+/// One learned record (S4 section 4 / shanjie.h learning_list_all), copied out of the C output
+/// before it is freed. R2: these are learned words; never log them.
+struct LearningEntry {
+    var context: String
+    var reading: String
+    var word: String
+    var weight: Double
+    var day: Int64
+}
+
 /// Owns one `ShanjieEngine` handle. Every call is on the main thread (IMK's callback thread), as
 /// the handle is not thread-safe (s3a section 6).
 @MainActor
@@ -70,6 +80,40 @@ final class CoreEngine {
     func learningStatus() -> UInt32? {
         var flags: UInt32 = 0
         return shanjie_engine_learning_status(handle, &flags) == 0 ? flags : nil
+    }
+
+    /// `learning_list_all` (shanjie.h): every record currently in memory, in store order. A record
+    /// holding an interior NUL would make the whole call fail (code 4); a non-zero code returns [].
+    func learningListAll() -> [LearningEntry] {
+        var outHandle: OpaquePointer?
+        let code = shanjie_engine_learning_list_all(handle, &outHandle)
+        guard code == 0, let outHandle else { return [] }
+        defer { shanjie_learning_output_free(outHandle) }
+
+        let count = Int(shanjie_learning_output_count(outHandle))
+        var entries: [LearningEntry] = []
+        for i in 0..<count {
+            let index = UInt32(i)
+            let context = shanjie_learning_output_context(outHandle, index).map { String(cString: $0) } ?? ""
+            let reading = shanjie_learning_output_reading(outHandle, index).map { String(cString: $0) } ?? ""
+            let word = shanjie_learning_output_word(outHandle, index).map { String(cString: $0) } ?? ""
+            entries.append(LearningEntry(
+                context: context, reading: reading, word: word,
+                weight: shanjie_learning_output_weight(outHandle, index),
+                day: shanjie_learning_output_day(outHandle, index)))
+        }
+        return entries
+    }
+
+    /// `learning_forget` (shanjie.h): forgets `word` for `reading` under every context key, the same
+    /// rule as ⌘⌫ on a highlighted candidate (s4-learning.md section 1.5). 0 on success; non-zero
+    /// codes per shanjie.h (1 NULL, 2 not UTF-8, 3 the full rewrite failed).
+    func learningForget(reading: String, word: String) -> Int32 {
+        return reading.withCString { readingPtr in
+            word.withCString { wordPtr in
+                shanjie_engine_learning_forget(handle, readingPtr, wordPtr)
+            }
+        }
     }
 
     // Custom vocabulary (ChiaKey integration)

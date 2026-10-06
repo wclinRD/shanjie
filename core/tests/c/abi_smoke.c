@@ -187,6 +187,7 @@ static int run_grid(const char *dir) {
 static int run_learn(const char *dir, const char *learn_dir) {
   ShanjieEngine *e = 0;
   uint32_t flags = 7u;
+  ShanjieLearningOutput *lh = 0;
   CHECK(501, shanjie_engine_new(dir, 0, &e) == 0 && e != 0);
   /* NULL engine */
   CHECK(502, shanjie_engine_set_left_context(0, "") == 1);
@@ -197,6 +198,22 @@ static int run_learn(const char *dir, const char *learn_dir) {
   /* NULL argument */
   CHECK(507, shanjie_engine_learning_open(e, 0) == 1);
   CHECK(508, shanjie_engine_learning_status(e, 0) == 1);
+  /* learning_list_all / learning_forget: NULL checks and bad UTF-8 */
+  CHECK(522, shanjie_engine_learning_list_all(0, &lh) == 1);
+  CHECK(523, shanjie_engine_learning_list_all(e, 0) == 1);
+  CHECK(524, shanjie_engine_learning_forget(0, "x", "y") == 1);
+  CHECK(525, shanjie_engine_learning_forget(e, 0, "y") == 1);
+  CHECK(526, shanjie_engine_learning_forget(e, "x", 0) == 1);
+  CHECK(527, shanjie_engine_learning_forget(e, "\xff\xfe", "y") == 2);  /* not UTF-8 */
+  CHECK(528, shanjie_engine_learning_forget(e, "x", "\xff\xfe") == 2);  /* not UTF-8 */
+  /* a NULL handle reads as empty */
+  CHECK(529, shanjie_learning_output_count(0) == 0);
+  CHECK(530, shanjie_learning_output_context(0, 0) == 0);
+  CHECK(531, shanjie_learning_output_reading(0, 0) == 0);
+  CHECK(532, shanjie_learning_output_word(0, 0) == 0);
+  CHECK(533, shanjie_learning_output_weight(0, 0) == 0.0);
+  CHECK(534, shanjie_learning_output_day(0, 0) == 0);
+  shanjie_learning_output_free(0);  /* NULL is a no-op */
   /* left context: NULL and "" mean none; anything not UTF-8 is 2 */
   CHECK(509, shanjie_engine_set_left_context(e, 0) == 0);
   CHECK(510, shanjie_engine_set_left_context(e, "") == 0);
@@ -213,6 +230,18 @@ static int run_learn(const char *dir, const char *learn_dir) {
   if (learn_dir) {
     CHECK(518, shanjie_engine_learning_open(e, learn_dir) == 0);
     CHECK(519, shanjie_engine_learning_status(e, &flags) == 0 && flags == 0u);
+    /* an empty store lists nothing */
+    lh = 0;
+    CHECK(535, shanjie_engine_learning_list_all(e, &lh) == 0 && lh != 0);
+    CHECK(536, shanjie_learning_output_count(lh) == 0);
+    shanjie_learning_output_free(lh);
+    /* forgetting a word with no record still succeeds and rewrites; nothing to list */
+    CHECK(537, shanjie_engine_learning_forget(e, "\xe3\x84\x92\xe3\x84\xa7\xe3\x84\xa3", "\xe6\xac\xa3") == 0);
+    CHECK(538, shanjie_engine_learning_status(e, &flags) == 0 && flags == 0u);
+    lh = 0;
+    CHECK(539, shanjie_engine_learning_list_all(e, &lh) == 0 && lh != 0);
+    CHECK(540, shanjie_learning_output_count(lh) == 0);
+    shanjie_learning_output_free(lh);
     CHECK(520, shanjie_engine_learning_clear(e) == 0);
     CHECK(521, shanjie_engine_learning_clear(e) == 0); /* a missing file is success */
   }

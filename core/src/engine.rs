@@ -1,7 +1,7 @@
 //! S3a key engine (docs/contracts/s3a.md): key events in, preedit / commit / candidates out.
 //! R2: no input text in errors or panics; types holding input text do not derive Debug.
 
-use crate::learn::{context_key, local_day, Learner, Record};
+use crate::learn::{context_key, decayed, local_day, Learner, LearningRecord, Record};
 use crate::learn_store::{LearnStore, Opened, StoreError, JOURNAL_MAX};
 use crate::lm::{decode_segment_learned, CappedLexicon, End, Learn, Lm, Profile};
 use crate::vocab::{CustomWord, VocabStore};
@@ -584,6 +584,53 @@ impl Engine {
     /// bit0: the last full rewrite of the learning file failed (§4).
     pub fn learning_status(&self) -> u32 {
         self.write_failed as u32
+    }
+
+    /// §1.3 / §4 display: every in-memory learning record, in learner order, as `LearningRecord`
+    /// (reading joined by `-`, weight decayed to today, day the last taught day). Works with or
+    /// without a store (no successful `learning_open`): the in-memory records are returned either way.
+    pub fn learning_list_all(&self) -> Vec<LearningRecord> {
+        let today = self.today();
+        self.learner
+            .records()
+            .iter()
+            .map(|r| LearningRecord {
+                context: r.context.clone(),
+                reading: r.reading.join("-"),
+                word: r.word.clone(),
+                weight: decayed(r, today),
+                day: r.day,
+            })
+            .collect()
+    }
+
+    /// §1.5 as a named API: forget `word` under `reading` in every context (including SENTINEL and
+    /// GLOBAL), the same rule as ⌘⌫ on a highlighted candidate. With a store the file is always
+    /// fully rewritten (§4), even when memory held no record (a record pruned on load can still be
+    /// in the file); without a store only memory changes and the flags are not touched (the §4
+    /// no-store rule, same as `forget_highlighted`). A pending learn of the same (reading, word) in
+    /// the current composition is dropped first, or the next Enter would teach the word back (§4).
+    /// A failed full rewrite leaves `must_rewrite` and bit0 set — the `write_failed` read below
+    /// reflects exactly this attempt: without a store `rewrite` is a no-op and `write_failed`
+    /// stays false, so only a real rewrite failure reports `StoreError::Io`.
+    pub fn learning_forget(&mut self, reading: &[String], word: &str) -> Result<(), StoreError> {
+        if self.store.is_some() {
+            self.must_rewrite = true;
+        }
+        // §4: a pending learn of the same word would teach it again at the next commit and append
+        // it back, so it is dropped with the records (as forget_highlighted does).
+        for f in self.fixed.iter_mut() {
+            if f.word == word && self.syls[f.start..f.end] == *reading {
+                f.pre = None;
+            }
+        }
+        self.learner.forget(reading, word);
+        self.rewrite(true);
+        if self.write_failed {
+            Err(StoreError::Io)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn learner(&self) -> &Learner {

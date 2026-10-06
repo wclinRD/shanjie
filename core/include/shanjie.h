@@ -125,6 +125,33 @@ int32_t shanjie_engine_learning_clear(ShanjieEngine *engine);
 //   fails falls back to a full rewrite, so it counts only through that rewrite). Set by a failed full
 //   rewrite; cleared only by a successful full rewrite or a successful learning_clear.
 int32_t shanjie_engine_learning_status(ShanjieEngine *engine, uint32_t *flags);
+// learning_list_all: lists every record currently in memory, in store order, with the five fields
+//   of the learning file: context key ("" global, "^" sentence start, or up to 2 Han characters),
+//   reading (syllables joined by "-"), word, weight, day. weight is the record's weight decayed to
+//   today (half-life 14 days; the value that decides whether the record still boosts decoding,
+//   s4-learning.md sections 1.3-1.4), day the local calendar day it was last taught (days since
+//   1970-01-01). Works with or without a successful learning_open. Returns 0 on success, 1 when
+//   engine or out is NULL, 4 when a record holds an interior NUL (defensive; stored records cannot).
+//   Returns an opaque handle on success, or NULL on failure. The caller must free the handle using
+//   shanjie_learning_output_free(handle). Output contents are learned words: never log them.
+typedef struct ShanjieLearningOutput ShanjieLearningOutput;
+int32_t shanjie_engine_learning_list_all(ShanjieEngine *engine, ShanjieLearningOutput **out);
+uint32_t shanjie_learning_output_count(ShanjieLearningOutput *handle);
+const char *shanjie_learning_output_context(ShanjieLearningOutput *handle, uint32_t index);
+const char *shanjie_learning_output_reading(ShanjieLearningOutput *handle, uint32_t index);
+const char *shanjie_learning_output_word(ShanjieLearningOutput *handle, uint32_t index);
+double  shanjie_learning_output_weight(ShanjieLearningOutput *handle, uint32_t index);
+int64_t shanjie_learning_output_day(ShanjieLearningOutput *handle, uint32_t index);
+void    shanjie_learning_output_free(ShanjieLearningOutput *handle);
+// learning_forget: forgets a word for one reading (reading_utf8 like "ㄅㄚˇ-ㄅㄚˇ") under every
+//   context key, the same rule as ⌘⌫ on a highlighted candidate (s4-learning.md section 1.5).
+//   After a successful learning_open the whole learning file is ALWAYS rewritten, even when memory
+//   held no record of the word (a record pruned on load can still be in the file); before any
+//   successful learning_open it changes memory only. Does not change the current display; the next
+//   key re-decodes with the new memory. Returns 0 on success (including a word with no record: the
+//   rewrite still happened), 1 when engine or a string is NULL, 2 when a string is not UTF-8, 3
+//   when the full rewrite failed (status bit0 is set too, and the next write stays a full rewrite).
+int32_t shanjie_engine_learning_forget(ShanjieEngine *engine, const char *reading_utf8, const char *word_utf8);
 
 // Custom vocabulary (ChiaKey integration): custom words stored in custom_vocab.tsv.
 // custom_vocab_open: dir is the vocabulary directory (.../Application Support/shanjie); creates it

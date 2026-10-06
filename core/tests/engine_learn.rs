@@ -2,18 +2,26 @@
 //! engine_lm.rs. The `store_` tests write the learning file into a temporary directory.
 use core::engine::*;
 use core::eval::{parse_rows, usable};
-use core::learn::{context_key, Learner, Level, Record, CAPACITY, GLOBAL, PRUNE_FLOOR, SENTINEL};
+use core::learn::{
+    context_key, decayed, Learner, Level, Record, CAPACITY, GLOBAL, PRUNE_FLOOR, SENTINEL,
+};
 use core::lm::{self, CappedLexicon, Lm};
 use core::{Lexicon, Syls};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 fn lm_path() -> PathBuf {
     let p = root().join("data/lm/bigram.sjlm");
-    assert!(p.exists(), "data/lm/bigram.sjlm is missing (see engine_lm.rs)");
+    assert!(
+        p.exists(),
+        "data/lm/bigram.sjlm is missing (see engine_lm.rs)"
+    );
     p
 }
 
@@ -29,7 +37,11 @@ fn shared() -> &'static Shared {
         let lm = Lm::load(&lm_path()).unwrap();
         let overlay = std::fs::read_to_string(root().join("data/lexicon/overlay-add.tsv")).unwrap();
         let capped = Arc::new(CappedLexicon::new(lex.clone(), &overlay, &lm));
-        Shared { lex, lm: Arc::new(lm), capped }
+        Shared {
+            lex,
+            lm: Arc::new(lm),
+            capped,
+        }
     })
 }
 /// Production lexicon + model, learning on, fixed clock (day 20000).
@@ -123,7 +135,13 @@ fn highlight(e: &mut Engine, mut o: Output, word: &str) -> Output {
     panic!("candidate not found");
 }
 fn rec(c: &str, r: &str, w: &str, weight: f64, day: i64) -> Record {
-    Record { context: c.into(), reading: syls(r), word: w.into(), weight, day }
+    Record {
+        context: c.into(),
+        reading: syls(r),
+        word: w.into(),
+        weight,
+        day,
+    }
 }
 
 // ---------- cases.tsv ----------
@@ -147,18 +165,39 @@ fn groups() -> Vec<Group> {
     for l in t.lines().skip(1) {
         let f: Vec<&str> = l.split('\t').collect();
         assert_eq!(f.len(), 5, "cases.tsv row");
-        let row = Row { kind: f[1].into(), sent: f[2].into(), same: (!f[3].is_empty()).then(|| f[3] == "1"), reading: f[4].into() };
-        assert_eq!(row.sent.chars().count(), row.reading.split(' ').count(), "one char per syllable");
+        let row = Row {
+            kind: f[1].into(),
+            sent: f[2].into(),
+            same: (!f[3].is_empty()).then(|| f[3] == "1"),
+            reading: f[4].into(),
+        };
+        assert_eq!(
+            row.sent.chars().count(),
+            row.reading.split(' ').count(),
+            "one char per syllable"
+        );
         if gs.last().is_none_or(|g| g.name != f[0]) {
-            gs.push(Group { name: f[0].into(), word: String::new(), other: String::new(), rows: Vec::new() });
+            gs.push(Group {
+                name: f[0].into(),
+                word: String::new(),
+                other: String::new(),
+                rows: Vec::new(),
+            });
         }
         gs.last_mut().unwrap().rows.push(row);
     }
     for g in &mut gs {
         let pair: Vec<&str> = g.name.split('/').collect();
         let teach = g.rows.iter().find(|r| r.kind == "teach").unwrap();
-        let (w, o) = if teach.sent.contains(pair[0]) { (pair[0], pair[1]) } else { (pair[1], pair[0]) };
-        assert!(teach.sent.contains(w) && !teach.sent.contains(o), "teach sentence holds exactly one word");
+        let (w, o) = if teach.sent.contains(pair[0]) {
+            (pair[0], pair[1])
+        } else {
+            (pair[1], pair[0])
+        };
+        assert!(
+            teach.sent.contains(w) && !teach.sent.contains(o),
+            "teach sentence holds exactly one word"
+        );
         g.word = w.into();
         g.other = o.into();
     }
@@ -176,7 +215,10 @@ fn collides(taught: &str, query: &str, single: bool) -> bool {
     if single {
         return taught == query && taught != SENTINEL;
     }
-    taught == query || (taught != SENTINEL && query != SENTINEL && taught.chars().last() == query.chars().last())
+    taught == query
+        || (taught != SENTINEL
+            && query != SENTINEL
+            && taught.chars().last() == query.chars().last())
 }
 
 /// Teach flow of A2: type the sentence, open the candidates at the word, choose it, Enter.
@@ -221,7 +263,11 @@ fn step0_ceiling_collisions_baselines() {
             .collect();
         let b = |pred: &dyn Fn(&Row) -> bool, e: &mut Engine| {
             let rows: Vec<&Row> = g.rows.iter().filter(|r| pred(r)).collect();
-            format!("{}/{}", rows.iter().filter(|r| ok(e, r)).count(), rows.len())
+            format!(
+                "{}/{}",
+                rows.iter().filter(|r| ok(e, r)).count(),
+                rows.len()
+            )
         };
         println!(
             "{} | key {tctx} vs {sctx}: {} | {:?} | {} / {} / {} / {}",
@@ -245,8 +291,15 @@ fn step0_ceiling_collisions_baselines() {
 /// the pair word; the exact-sentence flag is reported and also must not regress on common rows.
 fn judge(e: &mut Engine, g: &Group, row: &Row) -> (bool, bool) {
     let c = commit_of(e, &row.reading);
-    let (want, other) = if row.kind == "common" { (&g.other, &g.word) } else { (&g.word, &g.other) };
-    (c == row.sent, c.contains(want.as_str()) && !c.contains(other.as_str()))
+    let (want, other) = if row.kind == "common" {
+        (&g.other, &g.word)
+    } else {
+        (&g.word, &g.other)
+    };
+    (
+        c == row.sent,
+        c.contains(want.as_str()) && !c.contains(other.as_str()),
+    )
 }
 
 #[test]
@@ -268,9 +321,21 @@ fn a2_candidate_pick_learning_on_cases_tsv() {
         let (tctx, _, _) = span_of(&teach.sent, &g.word);
         let before: Vec<(bool, bool)> = g.rows.iter().map(|r| judge(&mut e, g, r)).collect();
         teach_row(&mut e, g, teach);
-        let n_rec = e.learner().records().iter().filter(|r| r.word == g.word).count();
+        let n_rec = e
+            .learner()
+            .records()
+            .iter()
+            .filter(|r| r.word == g.word)
+            .count();
         let after: Vec<(bool, bool)> = g.rows.iter().map(|r| judge(&mut e, g, r)).collect();
-        let f = |v: &[(bool, bool)]| g.rows.iter().zip(v).map(|(r, b)| format!("{}{}{}", &r.kind[..1], b.0 as u8, b.1 as u8)).collect::<Vec<_>>().join(" ");
+        let f = |v: &[(bool, bool)]| {
+            g.rows
+                .iter()
+                .zip(v)
+                .map(|(r, b)| format!("{}{}{}", &r.kind[..1], b.0 as u8, b.1 as u8))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         println!("{} | {} -> {} | {n_rec}", g.name, f(&before), f(&after));
         // Nothing to pick when the default already shows the taught word: the group is moot (reported).
         if n_rec == 0 && before[0].1 {
@@ -286,7 +351,10 @@ fn a2_candidate_pick_learning_on_cases_tsv() {
             if r.kind == "common" {
                 let lost = (before[i].0 && !after[i].0) || (before[i].1 && !after[i].1);
                 if coll {
-                    println!("   colliding common (reported, not gated): {} before {:?} after {:?}", r.sent, before[i], after[i]);
+                    println!(
+                        "   colliding common (reported, not gated): {} before {:?} after {:?}",
+                        r.sent, before[i], after[i]
+                    );
                 } else if lost {
                     regress.push(r.sent.clone());
                 }
@@ -296,32 +364,64 @@ fn a2_candidate_pick_learning_on_cases_tsv() {
                     learned += after[i].1 as usize;
                     wrong_reach += reach as usize;
                     learned_reach += (reach && after[i].1) as usize;
-                    println!("   same-ctx wrong before: {} -> {}", r.sent, if after[i].1 { "learned" } else { "NOT learned" });
+                    println!(
+                        "   same-ctx wrong before: {} -> {}",
+                        r.sent,
+                        if after[i].1 { "learned" } else { "NOT learned" }
+                    );
                 } else {
                     println!("   same-ctx already right before (not counted): {}", r.sent);
                 }
             } else if r.kind == "rare" {
-                println!("   other-ctx (number only): {} before {:?} after {:?}", r.sent, before[i], after[i]);
+                println!(
+                    "   other-ctx (number only): {} before {:?} after {:?}",
+                    r.sent, before[i], after[i]
+                );
             }
         }
         if g.name == "權力/全力" {
-            assert!(e.learner().records().iter().all(|r| r.context != GLOBAL), "1-char match makes no global record");
+            assert!(
+                e.learner().records().iter().all(|r| r.context != GLOBAL),
+                "1-char match makes no global record"
+            );
         }
     }
-    println!("same-context learned {learned}/{wrong}; reachable keys only {learned_reach}/{wrong_reach}");
+    println!(
+        "same-context learned {learned}/{wrong}; reachable keys only {learned_reach}/{wrong_reach}"
+    );
     println!("moot groups (the default already shows the taught word, nothing to pick): {moot:?}");
-    assert!(failed.is_empty(), "groups with a wrong default but no record: {failed:?}");
-    assert!(regress.is_empty(), "non-colliding common sentences regress: {regress:?}");
-    assert!(learned_reach * 100 >= wrong_reach * 80, "same-context learn rate under 80%");
+    assert!(
+        failed.is_empty(),
+        "groups with a wrong default but no record: {failed:?}"
+    );
+    assert!(
+        regress.is_empty(),
+        "non-colliding common sentences regress: {regress:?}"
+    );
+    assert!(
+        learned_reach * 100 >= wrong_reach * 80,
+        "same-context learn rate under 80%"
+    );
 
     // Informational: all 14 groups taught on one learner, then every common row.
     e.learning_clear().unwrap_err(); // no store: an error (§4), memory still dropped
     for g in &gs {
-        teach_row(&mut e, g, g.rows.iter().find(|r| r.kind == "teach").unwrap());
+        teach_row(
+            &mut e,
+            g,
+            g.rows.iter().find(|r| r.kind == "teach").unwrap(),
+        );
     }
-    let bad: Vec<&str> =
-        gs.iter().flat_map(|g| g.rows.iter().map(move |r| (g, r))).filter(|(g, r)| r.kind == "common" && !judge(&mut e, g, r).1).map(|(_, r)| r.sent.as_str()).collect();
-    println!("cumulative (all 14 taught): {} records, common rows with the wrong pair word: {bad:?}", e.learner().records().len());
+    let bad: Vec<&str> = gs
+        .iter()
+        .flat_map(|g| g.rows.iter().map(move |r| (g, r)))
+        .filter(|(g, r)| r.kind == "common" && !judge(&mut e, g, r).1)
+        .map(|(_, r)| r.sent.as_str())
+        .collect();
+    println!(
+        "cumulative (all 14 taught): {} records, common rows with the wrong pair word: {bad:?}",
+        e.learner().records().len()
+    );
 }
 
 /// The 12 groups whose cold word is already the default cannot be taught that word. Mirror run: teach
@@ -330,7 +430,10 @@ fn a2_candidate_pick_learning_on_cases_tsv() {
 #[test]
 fn a2_mirror_teach_the_other_word() {
     let (learned_reach, wrong_reach, ..) = mirror(lm::LEARN_EPS_GLOBAL);
-    assert!(learned_reach * 100 >= wrong_reach * 80, "mirror learn rate under 80%");
+    assert!(
+        learned_reach * 100 >= wrong_reach * 80,
+        "mirror learn rate under 80%"
+    );
 }
 
 /// (learned reachable, wrong reachable, learned, wrong) of the mirror run with global ε `eps`.
@@ -346,11 +449,23 @@ fn mirror(eps: f64) -> (usize, usize, usize, usize) {
         let teach = g.rows.iter().find(|r| r.kind == "teach").unwrap();
         let same = g.rows.iter().find(|r| r.same == Some(true)).unwrap();
         let (tctx, _, _) = span_of(&teach.sent, &g.word);
-        let reach = collides(&tctx, &span_of(&same.sent, &g.word).0, g.other.chars().count() == 1);
+        let reach = collides(
+            &tctx,
+            &span_of(&same.sent, &g.word).0,
+            g.other.chars().count() == 1,
+        );
         let (_, st, en) = span_of(&teach.sent, &g.word);
         let span: Vec<String> = syls(&teach.reading)[st..en].to_vec();
-        if !shared().lex.entries(&span).iter().any(|(w, _)| *w == g.other) {
-            println!("{} | skipped: {} has another reading than {}", g.name, g.other, g.word);
+        if !shared()
+            .lex
+            .entries(&span)
+            .iter()
+            .any(|(w, _)| *w == g.other)
+        {
+            println!(
+                "{} | skipped: {} has another reading than {}",
+                g.name, g.other, g.word
+            );
             continue;
         }
         let wants_other = |e: &mut Engine| commit_of(e, &same.reading).contains(&g.other);
@@ -359,7 +474,11 @@ fn mirror(eps: f64) -> (usize, usize, usize, usize) {
         let n_rec = e.learner().records().len();
         let after = wants_other(&mut e);
         println!("{} | teach {} at {tctx}: records {n_rec}, same-ctx row shows the other word {before} -> {after} (key reachable {reach})", g.name, g.other);
-        assert!(n_rec >= 1 || before, "{}: picking a different word must leave a record", g.name);
+        assert!(
+            n_rec >= 1 || before,
+            "{}: picking a different word must leave a record",
+            g.name
+        );
         if !before {
             wrong += 1;
             learned += after as usize;
@@ -385,7 +504,11 @@ fn context_key_learned_equals_context_key_queried() {
     assert_eq!(keys(&e), ["他"]);
     assert_eq!(type_syls(&mut e, "ㄊㄚ ㄒㄧㄣ").preedit, "他欣");
     e.key(k(KeyKind::Esc)).unwrap();
-    assert_eq!(type_syls(&mut e, "ㄒㄧㄣ").preedit, "鑫", "key ^ is not the key 他");
+    assert_eq!(
+        type_syls(&mut e, "ㄒㄧㄣ").preedit,
+        "鑫",
+        "key ^ is not the key 他"
+    );
     e.key(k(KeyKind::Esc)).unwrap();
 
     // (b) after a fixed word (single characters learn only under a Han key, §12 rule 6, so 奔 takes 好)
@@ -395,7 +518,11 @@ fn context_key_learned_equals_context_key_queried() {
     pick(&mut e, 2, 1, "奔");
     pick(&mut e, 2, 2, "欣");
     assert_eq!(e.key(k(KeyKind::Enter)).unwrap().commit, "奔欣");
-    assert_eq!(keys(&e), ["好", "好奔"], "奔 after 好, 欣 after 好 and the fixed word 奔");
+    assert_eq!(
+        keys(&e),
+        ["好", "好奔"],
+        "奔 after 好, 欣 after 好 and the fixed word 奔"
+    );
     e.set_left_context("好");
     assert_eq!(type_syls(&mut e, "ㄅㄣ ㄒㄧㄣ").preedit, "奔欣");
     e.key(k(KeyKind::Esc)).unwrap();
@@ -410,7 +537,13 @@ fn context_key_learned_equals_context_key_queried() {
     assert!(keys(&e).is_empty());
     // ... so the teach-time and decode-time keys are checked with a 2-character word (real model)
     const R2: &str = "ㄑㄩㄢˊ ㄌㄧˋ";
-    let other = |shown: &str| if shown == "權力" { "全力" } else { "權力" };
+    let other = |shown: &str| {
+        if shown == "權力" {
+            "全力"
+        } else {
+            "權力"
+        }
+    };
     let mut e = engine();
     type_syls(&mut e, "ㄊㄚ");
     e.key(Key::ch(',', MOD_SHIFT)).unwrap();
@@ -420,9 +553,17 @@ fn context_key_learned_equals_context_key_queried() {
     assert_eq!(keys(&e), ["^"], "after the punctuation token the key is ^");
     type_syls(&mut e, "ㄊㄚ");
     e.key(Key::ch(',', MOD_SHIFT)).unwrap();
-    assert_eq!(type_syls(&mut e, R2).preedit, format!("他，{w}"), "decode-time key after punctuation is the taught ^");
+    assert_eq!(
+        type_syls(&mut e, R2).preedit,
+        format!("他，{w}"),
+        "decode-time key after punctuation is the taught ^"
+    );
     e.key(k(KeyKind::Esc)).unwrap();
-    assert_ne!(type_syls(&mut e, &format!("ㄊㄚ {R2}")).preedit, format!("他{w}"), "no punctuation: key 他, not ^");
+    assert_ne!(
+        type_syls(&mut e, &format!("ㄊㄚ {R2}")).preedit,
+        format!("他{w}"),
+        "no punctuation: key 他, not ^"
+    );
     e.key(k(KeyKind::Esc)).unwrap();
 
     // (d) sentence start: a single character is not learned, a 2-character word is, under ^
@@ -438,7 +579,11 @@ fn context_key_learned_equals_context_key_queried() {
     pick(&mut e, 2, 2, &w);
     e.key(k(KeyKind::Enter)).unwrap();
     assert_eq!(keys(&e), ["^"]);
-    assert_eq!(type_syls(&mut e, R2).preedit, w, "decode-time key at sentence start is ^");
+    assert_eq!(
+        type_syls(&mut e, R2).preedit,
+        w,
+        "decode-time key at sentence start is ^"
+    );
     e.key(k(KeyKind::Esc)).unwrap();
 
     // (e) left context from the shell, kept to its last two Han characters
@@ -456,7 +601,11 @@ fn context_key_learned_equals_context_key_queried() {
 }
 /// The context keys of the learner's records, in insertion order.
 fn keys(e: &Engine) -> Vec<String> {
-    e.learner().records().iter().map(|r| r.context.clone()).collect()
+    e.learner()
+        .records()
+        .iter()
+        .map(|r| r.context.clone())
+        .collect()
 }
 
 // ---------- 4: sentinel, 1-char match, globalization ----------
@@ -467,29 +616,52 @@ fn sentinel_one_char_and_global() {
     let r = syls("ㄅㄚˇ ㄅㄚˇ");
     let mut l = Learner::default();
     l.teach(SENTINEL, &r, "把手", "爸爸", DAY);
-    assert!(l.lookup("管把", &r, DAY).1.is_empty() && l.lookup("", &r, DAY).1.is_empty(), "sentence start is not global");
+    assert!(
+        l.lookup("管把", &r, DAY).1.is_empty() && l.lookup("", &r, DAY).1.is_empty(),
+        "sentence start is not global"
+    );
     assert_eq!(l.lookup(SENTINEL, &r, DAY).1.len(), 1);
     assert!(l.records().iter().all(|x| x.context != GLOBAL));
 
     let mut l = Learner::default();
     l.teach("管把", &r, "權力", "全力", DAY);
-    assert_eq!(l.lookup("肯把", &r, DAY).1[0].0, "權力", "1-char step: same last character");
+    assert_eq!(
+        l.lookup("肯把", &r, DAY).1[0].0,
+        "權力",
+        "1-char step: same last character"
+    );
     assert_eq!(l.lookup("管把", &r, DAY).1[0].0, "權力");
-    assert!(l.lookup("把", &r, DAY).1.is_empty() || l.lookup("把", &r, DAY).1[0].0 == "權力", "1-char key still shares the last char");
+    assert!(
+        l.lookup("把", &r, DAY).1.is_empty() || l.lookup("把", &r, DAY).1[0].0 == "權力",
+        "1-char key still shares the last char"
+    );
     assert!(l.lookup("管他", &r, DAY).1.is_empty() && l.lookup(SENTINEL, &r, DAY).1.is_empty());
-    assert!(l.records().iter().all(|x| x.context != GLOBAL), "one teach never globalizes");
+    assert!(
+        l.records().iter().all(|x| x.context != GLOBAL),
+        "one teach never globalizes"
+    );
     // a second distinct full key globalizes; 1-char matches and repeats of the same key do not
     l.teach("管把", &r, "權力", "全力", DAY);
     assert!(l.records().iter().all(|x| x.context != GLOBAL));
     l.teach("肯把", &r, "權力", "全力", DAY);
-    assert_eq!(l.records().iter().filter(|x| x.context == GLOBAL).count(), 1);
-    assert_eq!(l.lookup("完全不同", &r, DAY).1[0].0, "權力", "global answers any context");
+    assert_eq!(
+        l.records().iter().filter(|x| x.context == GLOBAL).count(),
+        1
+    );
+    assert_eq!(
+        l.lookup("完全不同", &r, DAY).1[0].0,
+        "權力",
+        "global answers any context"
+    );
     assert_eq!(l.lookup(SENTINEL, &r, DAY).1[0].0, "權力");
     // SENTINEL counts as one of the two keys
     let mut l = Learner::default();
     l.teach(SENTINEL, &r, "權力", "全力", DAY);
     l.teach("管把", &r, "權力", "全力", DAY);
-    assert_eq!(l.records().iter().filter(|x| x.context == GLOBAL).count(), 1);
+    assert_eq!(
+        l.records().iter().filter(|x| x.context == GLOBAL).count(),
+        1
+    );
 }
 
 // ---------- 5: beyond PER_KEY ----------
@@ -508,18 +680,30 @@ fn learned_word_beyond_per_key_is_enumerated() {
     pick(&mut e, 1, 1, &word);
     e.key(k(KeyKind::Enter)).unwrap();
     e.set_left_context(TAUGHT_AFTER);
-    assert_eq!(type_syls(&mut e, reading).preedit, word, "rank 21 word wins after one teach");
+    assert_eq!(
+        type_syls(&mut e, reading).preedit,
+        word,
+        "rank 21 word wins after one teach"
+    );
     e.key(k(KeyKind::Esc)).unwrap();
     e.learning_clear().unwrap_err(); // no store: an error (§4), memory still dropped
     e.set_left_context(TAUGHT_AFTER);
-    assert_ne!(type_syls(&mut e, reading).preedit, word, "and only because of the record");
+    assert_ne!(
+        type_syls(&mut e, reading).preedit,
+        word,
+        "and only because of the record"
+    );
 }
 
 // ---------- 6: empty learner changes nothing ----------
 
 fn probe_rows() -> Vec<(String, Syls)> {
     let probe = std::fs::read_to_string(root().join("eval/probe/s2r-probe.txt")).unwrap();
-    parse_rows(&probe).unwrap().into_iter().map(|r| (r.sent, r.reading.unwrap())).collect()
+    parse_rows(&probe)
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.sent, r.reading.unwrap()))
+        .collect()
 }
 fn dev302() -> Vec<Syls> {
     dev302_rows().into_iter().map(|r| r.2).collect()
@@ -541,7 +725,10 @@ fn dev302_rows() -> Vec<(String, String, Syls)> {
     rows.truncate(302);
     rows.into_iter()
         .map(|r| {
-            let rd = r.reading.clone().unwrap_or_else(|| lex.to_syllables(&r.sent).unwrap());
+            let rd = r
+                .reading
+                .clone()
+                .unwrap_or_else(|| lex.to_syllables(&r.sent).unwrap());
             (r.ctx, r.sent, rd)
         })
         .collect()
@@ -554,12 +741,13 @@ fn commit_syls(e: &mut Engine, s: &Syls) -> String {
 /// and the 76-row probe) row for row.
 #[test]
 fn empty_learner_matches_goldens() {
-    let gold: Vec<String> = std::fs::read_to_string(root().join("eval/golden/s2-lm-dev302-top1.tsv"))
-        .unwrap()
-        .lines()
-        .filter(|l| !l.starts_with('#'))
-        .map(|l| l.split('\t').next().unwrap().to_string())
-        .collect();
+    let gold: Vec<String> =
+        std::fs::read_to_string(root().join("eval/golden/s2-lm-dev302-top1.tsv"))
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .map(|l| l.split('\t').next().unwrap().to_string())
+            .collect();
     let mut e = engine();
     let diff: Vec<usize> = dev302()
         .iter()
@@ -579,7 +767,10 @@ fn empty_learner_matches_goldens() {
         .collect();
     let rows = probe_rows();
     assert_eq!(rows.len(), want.len());
-    let diff: Vec<usize> = (0..rows.len()).filter(|&i| commit_syls(&mut e, &rows[i].1) != want[i]).map(|i| i + 1).collect();
+    let diff: Vec<usize> = (0..rows.len())
+        .filter(|&i| commit_syls(&mut e, &rows[i].1) != want[i])
+        .map(|i| i + 1)
+        .collect();
     assert!(diff.is_empty(), "probe differs at {diff:?}");
     assert!(e.learner().records().is_empty());
 }
@@ -592,9 +783,19 @@ fn decay_halves_every_fourteen_days_and_never_grows_back() {
     let mut l = Learner::default();
     l.teach("他", &r, "欣", "鑫", DAY);
     assert_eq!(l.lookup("他", &r, DAY).1[0].1, 1.0);
-    assert!((l.lookup("他", &r, DAY + 14).1[0].1 - 0.5).abs() < 1e-12, "half-life 14 days");
-    assert!(l.lookup("他", &r, DAY + 15).1.is_empty(), "below 0.5 stops boosting");
-    assert_eq!(l.lookup("他", &r, DAY - 100).1[0].1, 1.0, "a clock that went back does not grow weights");
+    assert!(
+        (l.lookup("他", &r, DAY + 14).1[0].1 - 0.5).abs() < 1e-12,
+        "half-life 14 days"
+    );
+    assert!(
+        l.lookup("他", &r, DAY + 15).1.is_empty(),
+        "below 0.5 stops boosting"
+    );
+    assert_eq!(
+        l.lookup("他", &r, DAY - 100).1[0].1,
+        1.0,
+        "a clock that went back does not grow weights"
+    );
 }
 
 #[test]
@@ -604,7 +805,13 @@ fn repick_halves_the_displaced_word_and_adds_to_the_new_one() {
     l.teach("他", &r, "欣", "鑫", DAY);
     l.teach("他", &r, "欣", "鑫", DAY);
     l.teach("他", &r, "新", "欣", DAY);
-    let w = |x: &str| l.lookup("他", &r, DAY).1.iter().find(|h| h.0 == x).map(|h| h.1);
+    let w = |x: &str| {
+        l.lookup("他", &r, DAY)
+            .1
+            .iter()
+            .find(|h| h.0 == x)
+            .map(|h| h.1)
+    };
     assert_eq!(w("欣"), Some(1.0), "2.0 halved");
     assert_eq!(w("新"), Some(1.0));
     // the displaced word had no record: nothing to halve, nothing created
@@ -616,17 +823,32 @@ fn repick_halves_the_displaced_word_and_adds_to_the_new_one() {
 #[test]
 fn prune_drops_decayed_records_and_caps_the_total() {
     let r = "ㄒㄧㄣ";
-    let mut l = Learner::from_records(vec![rec("他", r, "a", 1.0, DAY - 70), rec("他", r, "b", 1.0, DAY - 10), rec("他", r, "c", 0.06, DAY)]);
+    let mut l = Learner::from_records(vec![
+        rec("他", r, "a", 1.0, DAY - 70),
+        rec("他", r, "b", 1.0, DAY - 10),
+        rec("他", r, "c", 0.06, DAY),
+    ]);
     l.prune(DAY);
-    assert_eq!(index_words(&l, r), ["b", "c"], "70 days old is under PRUNE_FLOOR {PRUNE_FLOOR}; 10 days is not");
-    let mut big: Vec<Record> = (0..CAPACITY + 10).map(|i| rec("他", r, &format!("w{i}"), 1.0 + i as f64, DAY)).collect();
+    assert_eq!(
+        index_words(&l, r),
+        ["b", "c"],
+        "70 days old is under PRUNE_FLOOR {PRUNE_FLOOR}; 10 days is not"
+    );
+    let mut big: Vec<Record> = (0..CAPACITY + 10)
+        .map(|i| rec("他", r, &format!("w{i}"), 1.0 + i as f64, DAY))
+        .collect();
     big.push(rec("他", r, "low", 0.3, DAY));
     // a second reading, so removals move records across index buckets
     big.extend((0..20).map(|i| rec("他", "ㄅㄣ", &format!("b{i}"), 100.0 + i as f64, DAY)));
     let mut l = Learner::from_records(big);
     l.prune(DAY);
     assert_eq!(l.records().len(), CAPACITY);
-    assert!(l.records().iter().all(|x| x.word != "low" && x.word != "w0"), "lowest weights go first");
+    assert!(
+        l.records()
+            .iter()
+            .all(|x| x.word != "low" && x.word != "w0"),
+        "lowest weights go first"
+    );
     assert_eq!(index_words(&l, "ㄅㄣ").len(), 20);
     assert_eq!(index_words(&l, r).len() + 20, CAPACITY);
 }
@@ -634,7 +856,12 @@ fn prune_drops_decayed_records_and_caps_the_total() {
 /// index after removals would disagree.
 fn index_words<'a>(l: &'a Learner, reading: &str) -> Vec<&'a str> {
     let r = syls(reading);
-    let mut scan: Vec<&str> = l.records().iter().filter(|x| x.reading == r).map(|x| x.word.as_str()).collect();
+    let mut scan: Vec<&str> = l
+        .records()
+        .iter()
+        .filter(|x| x.reading == r)
+        .map(|x| x.word.as_str())
+        .collect();
     scan.sort_unstable();
     scan.dedup();
     let via_index = l.words_of(&r);
@@ -649,7 +876,10 @@ fn forget_removes_every_key() {
     let mut l = Learner::default();
     l.teach("他", &r, "欣奔", "鑫犇", DAY);
     l.teach(SENTINEL, &r, "欣奔", "鑫犇", DAY);
-    assert_eq!(l.records().iter().filter(|x| x.context == GLOBAL).count(), 1);
+    assert_eq!(
+        l.records().iter().filter(|x| x.context == GLOBAL).count(),
+        1
+    );
     l.teach("他", &r, "新奔", "鑫犇", DAY);
     l.forget(&r, "欣奔");
     assert_eq!(l.records().len(), 1, "only 新 is left");
@@ -672,7 +902,10 @@ fn command_backspace_forgets_the_highlighted_word() {
     e.set_learning(true);
     let plain = type_syls(&mut e, &same.reading).preedit;
     e.key(k(KeyKind::Esc)).unwrap();
-    assert!(plain.contains(&g.other) && !plain.contains(&g.word), "baseline shows the common word");
+    assert!(
+        plain.contains(&g.other) && !plain.contains(&g.word),
+        "baseline shows the common word"
+    );
     teach_row(&mut e, g, teach);
     assert!(n_records(&e) >= 1);
     let o = type_syls(&mut e, &same.reading);
@@ -681,15 +914,32 @@ fn command_backspace_forgets_the_highlighted_word() {
     e.key(k(KeyKind::Home)).unwrap();
     let o = e.key(k(KeyKind::Space)).unwrap();
     highlight(&mut e, o, &g.word);
-    let o = e.key(Key { kind: KeyKind::Backspace, ch: '\0', modifiers: MOD_COMMAND }).unwrap();
+    let o = e
+        .key(Key {
+            kind: KeyKind::Backspace,
+            ch: '\0',
+            modifiers: MOD_COMMAND,
+        })
+        .unwrap();
     assert!(o.handled, "⌘⌫ is consumed with candidates open");
-    assert!(e.learner().records().iter().all(|r| r.word != g.word), "no record of the word is left");
+    assert!(
+        e.learner().records().iter().all(|r| r.word != g.word),
+        "no record of the word is left"
+    );
     assert_eq!(o.preedit, plain, "composition back to the unlearned output");
     assert!(!o.candidates.is_empty(), "candidate window stays open");
     // without candidates ⌘⌫ is passed to the app
     e.key(k(KeyKind::Esc)).unwrap();
     type_syls(&mut e, &same.reading);
-    assert!(!e.key(Key { kind: KeyKind::Backspace, ch: '\0', modifiers: MOD_COMMAND }).unwrap().handled);
+    assert!(
+        !e.key(Key {
+            kind: KeyKind::Backspace,
+            ch: '\0',
+            modifiers: MOD_COMMAND
+        })
+        .unwrap()
+        .handled
+    );
 }
 
 // ---------- 8: commit paths (§1.2) ----------
@@ -735,7 +985,10 @@ fn row_expanded_pick_equals_enter() {
     let mut b = picked();
     let cb = b.key(k(KeyKind::Enter)).unwrap().commit;
     assert_eq!((ca.as_str(), n_records(&a)), ("欣", 1));
-    assert!(ca == cb && a.learner().records() == b.learner().records(), "pick and Enter learn the same records");
+    assert!(
+        ca == cb && a.learner().records() == b.learner().records(),
+        "pick and Enter learn the same records"
+    );
 }
 #[test]
 fn row_rule21_passthrough_commit_learns() {
@@ -756,7 +1009,11 @@ fn row_max_syllables_commit_learns() {
             }
         }
     }
-    assert_eq!(commit.chars().count(), MAX_SYLLABLES, "the 40th syllable auto-commits");
+    assert_eq!(
+        commit.chars().count(),
+        MAX_SYLLABLES,
+        "the 40th syllable auto-commits"
+    );
     assert!(commit.starts_with('欣'));
     assert_eq!(n_records(&e), 1);
 }
@@ -843,9 +1100,22 @@ fn left_context_is_dropped_after_commit() {
     type_syls(&mut e, "ㄑㄩㄢˊ ㄌㄧˋ");
     e.key(k(KeyKind::Enter)).unwrap();
     let shown = type_syls(&mut e, "ㄑㄩㄢˊ ㄌㄧˋ").preedit;
-    pick(&mut e, 2, 2, if shown == "權力" { "全力" } else { "權力" });
+    pick(
+        &mut e,
+        2,
+        2,
+        if shown == "權力" {
+            "全力"
+        } else {
+            "權力"
+        },
+    );
     e.key(k(KeyKind::Enter)).unwrap();
-    assert_eq!(e.learner().records()[0].context, SENTINEL, "the second composition had no left context");
+    assert_eq!(
+        e.learner().records()[0].context,
+        SENTINEL,
+        "the second composition had no left context"
+    );
 }
 
 // ---------- 9: a panic in learning does not eat the commit ----------
@@ -887,7 +1157,11 @@ fn raw(dir: &Path) -> String {
 fn data_lines(dir: &Path) -> usize {
     raw(dir).lines().skip(1).count()
 }
-const FORGET: Key = Key { kind: KeyKind::Backspace, ch: '\0', modifiers: MOD_COMMAND };
+const FORGET: Key = Key {
+    kind: KeyKind::Backspace,
+    ch: '\0',
+    modifiers: MOD_COMMAND,
+};
 /// A new tiny engine on `dir` (the "fresh engine" every write test ends with).
 fn reopen(dir: &Path) -> (Engine, core::learn_store::Opened) {
     let mut e = tiny(TINY, TINY);
@@ -896,20 +1170,45 @@ fn reopen(dir: &Path) -> (Engine, core::learn_store::Opened) {
 }
 /// Records as a sorted list, to compare two learners regardless of record order.
 fn sorted(e: &Engine) -> Vec<String> {
-    let mut v: Vec<String> = e.learner().records().iter().map(|r| format!("{}|{:?}|{}|{}|{}", r.context, r.reading, r.word, r.weight, r.day)).collect();
+    let mut v: Vec<String> = e
+        .learner()
+        .records()
+        .iter()
+        .map(|r| {
+            format!(
+                "{}|{:?}|{}|{}|{}",
+                r.context, r.reading, r.word, r.weight, r.day
+            )
+        })
+        .collect();
     v.sort();
     v
 }
 /// Records new or changed since `before`, by position: between full rewrites nothing is pruned, a
 /// teach updates records in place and pushes new ones at the end.
 fn changed(before: &[Record], e: &Engine) -> usize {
-    e.learner().records().iter().enumerate().filter(|(i, r)| before.get(*i) != Some(*r)).count()
+    e.learner()
+        .records()
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| before.get(*i) != Some(*r))
+        .count()
 }
 /// One learning Enter on a one-syllable TINY reading: pick the homophone that is not shown.
 fn repick(e: &mut Engine, reading: &str) -> String {
     e.set_left_context(TAUGHT_AFTER);
     let shown = type_syls(e, reading).preedit;
-    let word = if reading == "ㄒㄧㄣ" { if shown == "欣" { "鑫" } else { "欣" } } else if shown == "奔" { "犇" } else { "奔" };
+    let word = if reading == "ㄒㄧㄣ" {
+        if shown == "欣" {
+            "鑫"
+        } else {
+            "欣"
+        }
+    } else if shown == "奔" {
+        "犇"
+    } else {
+        "奔"
+    };
     pick(e, 1, 1, word);
     assert_eq!(e.key(k(KeyKind::Enter)).unwrap().commit, word);
     word.to_string()
@@ -935,7 +1234,11 @@ fn store_commit_writes_the_file_and_reopen_restores() {
     pick(&mut e, 1, 1, "欣");
     e.key(k(KeyKind::Enter)).unwrap();
     let text = raw(&dir);
-    let rows: Vec<Vec<&str>> = text.lines().skip(1).map(|l| l.split('\t').collect()).collect();
+    let rows: Vec<Vec<&str>> = text
+        .lines()
+        .skip(1)
+        .map(|l| l.split('\t').collect())
+        .collect();
     assert_eq!(rows.len(), 1);
     assert_eq!(&rows[0][..3], [TAUGHT_AFTER, "ㄒㄧㄣ", "欣"]);
     assert_eq!(rows[0].len(), 5, "five fields only");
@@ -963,14 +1266,25 @@ fn store_forget_then_enter_does_not_learn_the_word_back() {
     pick(&mut e, 1, 1, "欣"); // a re-pick over the default 鑫: learned at commit unless dropped
     let o = e.key(k(KeyKind::Space)).unwrap(); // the same span's candidates again
     highlight(&mut e, o, "欣");
-    e.key(Key { kind: KeyKind::Backspace, ch: '\0', modifiers: MOD_COMMAND }).unwrap();
+    e.key(Key {
+        kind: KeyKind::Backspace,
+        ch: '\0',
+        modifiers: MOD_COMMAND,
+    })
+    .unwrap();
     e.key(k(KeyKind::Esc)).unwrap(); // closes the candidates, keeps the composition
     assert_eq!(e.key(k(KeyKind::Enter)).unwrap().commit, "欣");
     let mut fresh = tiny(TINY, TINY);
     fresh.learning_open(&dir).unwrap();
-    assert!(fresh.learner().records().iter().all(|r| r.word != "欣"), "the forgotten word was learned back");
+    assert!(
+        fresh.learner().records().iter().all(|r| r.word != "欣"),
+        "the forgotten word was learned back"
+    );
     let text = std::fs::read_to_string(dir.join("learning.tsv")).unwrap_or_default();
-    assert!(!text.contains('欣'), "a line of the forgotten word is on disk");
+    assert!(
+        !text.contains('欣'),
+        "a line of the forgotten word is on disk"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
@@ -983,7 +1297,10 @@ fn store_learning_off_then_enter_writes_nothing_and_clear_removes_the_file() {
     pick(&mut e, 1, 1, "欣");
     e.set_learning(false);
     e.key(k(KeyKind::Enter)).unwrap();
-    assert!(!file_of(&dir).exists(), "set_learning(0) then Enter writes nothing");
+    assert!(
+        !file_of(&dir).exists(),
+        "set_learning(0) then Enter writes nothing"
+    );
     e.set_learning(true);
     e.set_left_context(TAUGHT_AFTER);
     type_syls(&mut e, "ㄒㄧㄣ");
@@ -1000,7 +1317,10 @@ fn store_learning_off_then_enter_writes_nothing_and_clear_removes_the_file() {
     assert!(!file_of(&dir).exists() && n_records(&e) == 0);
     e.learning_clear().unwrap(); // already gone: success
     let (e2, opened) = reopen(&dir);
-    assert_eq!((opened, n_records(&e2)), (core::learn_store::Opened::Fresh, 0));
+    assert_eq!(
+        (opened, n_records(&e2)),
+        (core::learn_store::Opened::Fresh, 0)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1062,7 +1382,11 @@ fn store_failed_rewrite_then_forget_never_brings_the_word_back() {
     // 2. another learning Enter: no append, the file is unchanged byte for byte, bit0 stays
     let before = std::fs::read(file_of(&dir)).unwrap();
     assert_eq!(repick(&mut e, "ㄅㄣ"), "奔");
-    assert_eq!(std::fs::read(file_of(&dir)).unwrap(), before, "nothing appended while a rewrite is owed");
+    assert_eq!(
+        std::fs::read(file_of(&dir)).unwrap(),
+        before,
+        "nothing appended while a rewrite is owed"
+    );
     assert_eq!(e.learning_status(), 1);
     // 3. the obstacle goes; a learning Enter (not a forget) rewrites and clears bit0
     std::fs::remove_dir_all(&tmp).unwrap();
@@ -1070,7 +1394,10 @@ fn store_failed_rewrite_then_forget_never_brings_the_word_back() {
     assert_eq!(e.learning_status(), 0);
     // 4. a new engine: W has no record
     let (e2, _) = reopen(&dir);
-    assert!(e2.learner().records().iter().all(|r| r.word != "欣"), "the forgotten word stays forgotten");
+    assert!(
+        e2.learner().records().iter().all(|r| r.word != "欣"),
+        "the forgotten word stays forgotten"
+    );
     assert!(!raw(&dir).contains("欣"));
     assert_eq!(sorted(&e2), sorted(&e), "what was written reads back");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1089,14 +1416,20 @@ fn store_pending_rewrite_is_retried_by_a_commit_that_learns_nothing() {
     std::fs::write(tmp.join("x"), b"x").unwrap();
     forget(&mut e, "ㄒㄧㄣ", "欣");
     assert_eq!(e.learning_status(), 1);
-    assert!(raw(&dir).contains("欣"), "the failed forget left the word in the file");
+    assert!(
+        raw(&dir).contains("欣"),
+        "the failed forget left the word in the file"
+    );
     std::fs::remove_dir_all(&tmp).unwrap();
     // no left context: the pick is a single character under ^, so nothing is learned
     type_syls(&mut e, "ㄅㄣ");
     pick(&mut e, 1, 1, "奔");
     assert_eq!(e.key(k(KeyKind::Enter)).unwrap().commit, "奔");
     assert_eq!(e.learning_status(), 0, "the owed rewrite was retried");
-    assert!(!raw(&dir).contains("欣"), "and it removed the forgotten word from the file");
+    assert!(
+        !raw(&dir).contains("欣"),
+        "and it removed the forgotten word from the file"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1109,7 +1442,10 @@ fn store_forget_panic_forces_the_next_write_to_rewrite() {
     e.learning_open(&dir).unwrap();
     repick(&mut e, "ㄒㄧㄣ"); // full rewrite (first write after open)
     repick(&mut e, "ㄒㄧㄣ"); // append
-    assert!(data_lines(&dir) > n_records(&e), "an append left a superseded line");
+    assert!(
+        data_lines(&dir) > n_records(&e),
+        "an append left a superseded line"
+    );
     e.inject_forget_panic();
     type_syls(&mut e, "ㄒㄧㄣ");
     let o = e.key(k(KeyKind::Space)).unwrap();
@@ -1120,7 +1456,11 @@ fn store_forget_panic_forces_the_next_write_to_rewrite() {
     assert_eq!(e.learning_status(), 0, "bit0 is not touched by a panic");
     assert!(raw(&dir).contains("欣"), "the file was not written yet");
     repick(&mut e, "ㄅㄣ");
-    assert_eq!(data_lines(&dir), n_records(&e), "a full rewrite, not an append");
+    assert_eq!(
+        data_lines(&dir),
+        n_records(&e),
+        "a full rewrite, not an append"
+    );
     assert!(!raw(&dir).contains("欣"));
     let (e2, _) = reopen(&dir);
     assert_eq!(sorted(&e2), sorted(&e));
@@ -1136,7 +1476,10 @@ fn store_hundred_days_without_reopening_prunes_the_file() {
     assert_eq!(repick(&mut e, "ㄒㄧㄣ"), "欣");
     e.set_today(Some(DAY + 100));
     repick(&mut e, "ㄅㄣ");
-    assert!(!raw(&dir).contains("欣"), "the 100-day-old record is gone from the file (day rule)");
+    assert!(
+        !raw(&dir).contains("欣"),
+        "the 100-day-old record is gone from the file (day rule)"
+    );
     let mut e2 = tiny(TINY, TINY);
     e2.set_today(Some(DAY + 100));
     e2.learning_open(&dir).unwrap();
@@ -1185,7 +1528,11 @@ fn store_torn_tail_is_skipped_and_never_glued() {
     assert!(e2.learner().records().iter().all(|r| r.word != "奔") && n_records(&e2) == 1);
     repick(&mut e2, "ㄅㄣ");
     let (e3, opened) = reopen(&dir);
-    assert_eq!(opened, Opened::Loaded { skipped: 0 }, "no glued or broken line");
+    assert_eq!(
+        opened,
+        Opened::Loaded { skipped: 0 },
+        "no glued or broken line"
+    );
     assert_eq!(data_lines(&dir), n_records(&e3));
     assert!(raw(&dir).ends_with('\n'));
     assert_eq!(sorted(&e3), sorted(&e2));
@@ -1201,7 +1548,11 @@ fn store_append_grows_by_the_touched_records_and_compacts_at_journal_max() {
     let mut e = tiny(TINY, TINY);
     e.learning_open(&dir).unwrap();
     repick(&mut e, "ㄒㄧㄣ");
-    assert_eq!(data_lines(&dir), n_records(&e), "first write after open: full rewrite");
+    assert_eq!(
+        data_lines(&dir),
+        n_records(&e),
+        "first write after open: full rewrite"
+    );
     let mut appended = 0;
     let mut compacted = false;
     for _ in 0..JOURNAL_MAX {
@@ -1215,7 +1566,11 @@ fn store_append_grows_by_the_touched_records_and_compacts_at_journal_max() {
             compacted = true;
             break;
         }
-        assert_eq!(data_lines(&dir), lines + touched, "one line per changed record");
+        assert_eq!(
+            data_lines(&dir),
+            lines + touched,
+            "one line per changed record"
+        );
         appended += touched;
     }
     assert!(compacted);
@@ -1235,7 +1590,10 @@ fn store_forget_leaves_no_trace_and_clear_starts_over() {
         repick(&mut e, "ㄒㄧㄣ");
     }
     repick(&mut e, "ㄅㄣ");
-    assert!(raw(&dir).matches("欣").count() >= 2, "appended versions of 欣");
+    assert!(
+        raw(&dir).matches("欣").count() >= 2,
+        "appended versions of 欣"
+    );
     forget(&mut e, "ㄒㄧㄣ", "欣");
     assert_eq!(raw(&dir).matches("欣").count(), 0);
     assert_eq!(e.learning_status(), 0);
@@ -1244,7 +1602,13 @@ fn store_forget_leaves_no_trace_and_clear_starts_over() {
     e.learning_clear().unwrap();
     assert!(!file_of(&dir).exists() && dir.is_dir());
     let w = repick(&mut e, "ㄅㄣ");
-    assert_eq!(raw(&dir), format!("{}\n{TAUGHT_AFTER}\tㄅㄣ\t{w}\t1\t{DAY}\n", core::learn_store::HEADER));
+    assert_eq!(
+        raw(&dir),
+        format!(
+            "{}\n{TAUGHT_AFTER}\tㄅㄣ\t{w}\t1\t{DAY}\n",
+            core::learn_store::HEADER
+        )
+    );
     let (e2, _) = reopen(&dir);
     assert_eq!(sorted(&e2), sorted(&e));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1267,7 +1631,233 @@ fn store_forget_rewrites_even_when_memory_has_no_record() {
     assert!(!raw(&dir).contains("欣"), "the forget rewrote the file");
     assert_eq!(e.learning_status(), 0);
     let (e2, opened) = reopen(&dir);
-    assert_eq!((opened, n_records(&e2)), (core::learn_store::Opened::Loaded { skipped: 0 }, 0));
+    assert_eq!(
+        (opened, n_records(&e2)),
+        (core::learn_store::Opened::Loaded { skipped: 0 }, 0)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The named list API mirrors the in-memory records: five fields, reading joined by `-`, weight
+/// decayed to today. Covered without a store (memory only) and with one (file and memory agree).
+/// The two-character word 警官 (multi-syllable reading, proven teach path like
+/// command_backspace_forgets_the_highlighted_word) exercises the `-` join through the engine.
+#[test]
+fn learning_list_all_matches_the_learner_with_and_without_store() {
+    let gs = groups();
+    let g = gs.iter().find(|g| g.name == "警官/景觀").unwrap();
+    let teach = &g.rows[0];
+
+    // Without a store: a teach lives in memory only, and the list still shows it.
+    let mut e = engine();
+    teach_row(&mut e, g, teach);
+    let got = e.learning_list_all();
+    assert_eq!(got.len(), 1);
+    let r = &e.learner().records()[0];
+    assert_eq!(
+        (
+            got[0].context.as_str(),
+            got[0].reading.as_str(),
+            got[0].word.as_str()
+        ),
+        (
+            r.context.as_str(),
+            r.reading.join("-").as_str(),
+            r.word.as_str()
+        ),
+        "context, joined reading, word"
+    );
+    assert!(
+        got[0].reading.contains('-'),
+        "multi-syllable reading is joined"
+    );
+    assert_eq!(
+        (got[0].weight, got[0].day),
+        (r.weight, DAY),
+        "taught today: decayed weight == raw weight, day is the teach day"
+    );
+
+    // With a store: the file's data rows are the same records, in the same order.
+    let dir = tmp_dir("listall");
+    let mut e = engine();
+    e.learning_open(&dir).unwrap();
+    teach_row(&mut e, g, teach);
+    let got = e.learning_list_all();
+    assert_eq!(got.len(), n_records(&e));
+    let text = raw(&dir);
+    let rows: Vec<Vec<&str>> = text
+        .lines()
+        .skip(1)
+        .map(|l| l.split('\t').collect())
+        .collect();
+    assert_eq!(rows.len(), got.len(), "the file holds the same records");
+    for (lr, row) in got.iter().zip(rows) {
+        assert_eq!(
+            &row[..3],
+            [lr.context.as_str(), lr.reading.as_str(), lr.word.as_str()]
+        );
+        assert_eq!(row[3], lr.weight.to_string(), "same weight");
+        assert_eq!(row[4], lr.day.to_string(), "same day");
+    }
+    let (e2, _) = reopen(&dir);
+    assert_eq!(sorted(&e2), sorted(&e), "what was written reads back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §1.3 / §4 display with a clock that moved: taught at DAY, listed 14 days later the weight is
+/// exactly `decayed` (half-life `HALF_LIFE_DAYS`), while `day` still reports the teach day. The
+/// expected value comes from `learn::decayed` itself, not a hard-coded number.
+#[test]
+fn learning_list_all_decays_the_weight_with_the_clock() {
+    let mut e = tiny(TINY, TINY);
+    assert_eq!(repick(&mut e, "ㄒㄧㄣ"), "欣");
+    let r = e.learner().records()[0].clone();
+    assert_eq!((r.weight, r.day), (1.0, DAY), "taught today");
+    e.set_today(Some(DAY + 14));
+    let got = e.learning_list_all();
+    assert_eq!(got.len(), 1);
+    assert_eq!(
+        got[0].weight,
+        decayed(&r, DAY + 14),
+        "14 days at a 14-day half-life: the list decays the weight"
+    );
+    assert_eq!(got[0].day, DAY, "day is the teach day, not the query day");
+    assert_eq!(
+        (got[0].context.as_str(), got[0].word.as_str()),
+        (r.context.as_str(), r.word.as_str()),
+        "the other fields are the record's own"
+    );
+}
+
+/// The named forget API: one call removes the (reading, word) under every context, rewrites the
+/// whole file without the word (0600), and a fresh engine sees none of it.
+#[test]
+fn learning_forget_removes_every_context_and_rewrites_the_file() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tmp_dir("forget-api");
+    let mut e = tiny(TINY, TINY);
+    e.learning_open(&dir).unwrap();
+    e.set_left_context(TAUGHT_AFTER);
+    type_syls(&mut e, "ㄒㄧㄣ");
+    pick(&mut e, 1, 1, "欣");
+    e.key(k(KeyKind::Enter)).unwrap();
+    e.set_left_context("好");
+    type_syls(&mut e, "ㄒㄧㄣ");
+    pick(&mut e, 1, 1, "欣");
+    e.key(k(KeyKind::Enter)).unwrap();
+    assert_eq!(
+        n_records(&e),
+        2,
+        "two contexts, single character so no global record"
+    );
+    e.learning_forget(&syls("ㄒㄧㄣ"), "欣").unwrap();
+    assert_eq!(n_records(&e), 0, "both contexts are gone");
+    assert_eq!(data_lines(&dir), 0, "a full rewrite left only the header");
+    assert_eq!(e.learning_status(), 0, "the rewrite succeeded");
+    let md = std::fs::metadata(file_of(&dir)).unwrap();
+    assert_eq!(md.mode() & 0o777, 0o600, "the rewrite keeps the file 0600");
+    let (e2, _) = reopen(&dir);
+    assert_eq!(
+        n_records(&e2),
+        0,
+        "a fresh engine reads none of the word back"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §4 no-store rule: without a successful learning_open, the named forget changes memory only —
+/// no file is written and the flags are not touched.
+#[test]
+fn learning_forget_without_a_store_changes_memory_only() {
+    let dir = tmp_dir("forget-api-nostore");
+    let mut e = tiny(TINY, TINY);
+    e.set_left_context(TAUGHT_AFTER);
+    type_syls(&mut e, "ㄒㄧㄣ");
+    pick(&mut e, 1, 1, "欣");
+    e.key(k(KeyKind::Enter)).unwrap();
+    e.set_left_context("好");
+    type_syls(&mut e, "ㄒㄧㄣ");
+    pick(&mut e, 1, 1, "欣");
+    e.key(k(KeyKind::Enter)).unwrap();
+    assert_eq!(n_records(&e), 2);
+    e.learning_forget(&syls("ㄒㄧㄣ"), "欣").unwrap();
+    assert_eq!(n_records(&e), 0);
+    assert!(!file_of(&dir).exists(), "no store: nothing is written");
+    assert_eq!(
+        e.learning_status(),
+        0,
+        "flags are not touched without a store"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §4: the named forget also drops a pending learn of the same (reading, word) in the current
+/// composition, or the next Enter would teach the word back (mirrors store_forget_then_enter...).
+#[test]
+fn learning_forget_drops_a_pending_learn_of_the_same_word() {
+    let dir = tmp_dir("forget-api-pending");
+    let mut e = tiny(TINY, TINY);
+    e.learning_open(&dir).unwrap();
+    e.set_left_context(TAUGHT_AFTER);
+    type_syls(&mut e, "ㄒㄧㄣ");
+    pick(&mut e, 1, 1, "欣"); // a re-pick over the default 鑫: learned at commit unless dropped
+    e.learning_forget(&syls("ㄒㄧㄣ"), "欣").unwrap();
+    assert_eq!(e.key(k(KeyKind::Enter)).unwrap().commit, "欣");
+    assert_eq!(n_records(&e), 0, "the pending learn was dropped");
+    let (e2, _) = reopen(&dir);
+    assert_eq!(n_records(&e2), 0, "nothing was learned back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §4 / §6.13 for the named API: the forget's full rewrite fails (a directory sits at
+/// `learning.tsv.tmp`). Memory goes first, so `learning_forget` returns Err while the word is
+/// already gone from memory; bit0 = 1 and `must_rewrite` stays 1, so the next learning Enter is a
+/// full rewrite (never an append) and the word never comes back.
+#[test]
+fn learning_forget_rewrite_failure_keeps_memory_changed_and_must_rewrite() {
+    let dir = tmp_dir("forget-api-fail");
+    let tmp = dir.join(core::learn_store::TMP);
+    let mut e = tiny(TINY, TINY);
+    e.learning_open(&dir).unwrap();
+    assert_eq!(repick(&mut e, "ㄒㄧㄣ"), "欣");
+    assert!(raw(&dir).contains("欣"));
+    // a directory at the temporary's name makes every full rewrite fail
+    std::fs::create_dir(&tmp).unwrap();
+    std::fs::write(tmp.join("x"), b"x").unwrap();
+    let before = std::fs::read(file_of(&dir)).unwrap();
+    assert!(
+        e.learning_forget(&syls("ㄒㄧㄣ"), "欣").is_err(),
+        "the failed rewrite reports StoreError (ABI 3)"
+    );
+    assert_eq!(e.learning_status(), 1, "bit0: the forget's rewrite failed");
+    assert!(
+        e.learner().records().iter().all(|r| r.word != "欣"),
+        "memory dropped the word despite the failed file write"
+    );
+    assert_eq!(
+        std::fs::read(file_of(&dir)).unwrap(),
+        before,
+        "the failed rewrite left the file unchanged"
+    );
+    // must_rewrite is still 1: another learning Enter must not append
+    assert_eq!(repick(&mut e, "ㄅㄣ"), "奔");
+    assert_eq!(
+        std::fs::read(file_of(&dir)).unwrap(),
+        before,
+        "nothing appended while a rewrite is owed"
+    );
+    assert_eq!(e.learning_status(), 1);
+    // the obstacle goes; a learning Enter (not a forget) rewrites and clears bit0
+    std::fs::remove_dir_all(&tmp).unwrap();
+    repick(&mut e, "ㄅㄣ");
+    assert_eq!(e.learning_status(), 0);
+    let (e2, _) = reopen(&dir);
+    assert!(
+        e2.learner().records().iter().all(|r| r.word != "欣"),
+        "the forgotten word stays forgotten"
+    );
+    assert!(!raw(&dir).contains("欣"));
+    assert_eq!(sorted(&e2), sorted(&e), "what was written reads back");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1293,7 +1883,11 @@ fn store_append_refusals_fall_back_to_a_full_rewrite() {
             }
             "fifo" => {
                 std::fs::remove_file(&f).unwrap();
-                assert!(std::process::Command::new("/usr/bin/mkfifo").arg(&f).status().unwrap().success());
+                assert!(std::process::Command::new("/usr/bin/mkfifo")
+                    .arg(&f)
+                    .status()
+                    .unwrap()
+                    .success());
             }
             "hardlink" => std::fs::hard_link(&f, &out).unwrap(),
             "empty" => std::fs::write(&f, b"").unwrap(),
@@ -1306,13 +1900,23 @@ fn store_append_refusals_fall_back_to_a_full_rewrite() {
             repick(&mut e, "ㄒㄧㄣ");
             let _ = tx.send(e);
         });
-        let e = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the Enter blocked");
+        let e = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the Enter blocked");
         let md = std::fs::symlink_metadata(&f).unwrap();
         assert!(md.file_type().is_file(), "{case}: a regular file");
-        assert_eq!((md.mode() & 0o777, md.nlink()), (0o600, 1), "{case}: 0600, one link");
+        assert_eq!(
+            (md.mode() & 0o777, md.nlink()),
+            (0o600, 1),
+            "{case}: 0600, one link"
+        );
         assert_eq!(e.learning_status(), 0, "{case}");
         assert_eq!(data_lines(&dir), n_records(&e), "{case}: a full rewrite");
-        assert_eq!(std::fs::read(&out).ok(), kept, "{case}: nothing written through a link");
+        assert_eq!(
+            std::fs::read(&out).ok(),
+            kept,
+            "{case}: nothing written through a link"
+        );
         let (e2, _) = reopen(&dir);
         assert_eq!(sorted(&e2), sorted(&e), "{case}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1370,7 +1974,10 @@ fn perf_full_store_per_key_and_enter_with_write() {
             }
         }
     }
-    let contexts = ["^", "", "我", "你們", "今天", "的", "了", "在", "是", "他說", "大家", "一個", "不會", "這樣", "所以", "還是", "沒有"];
+    let contexts = [
+        "^", "", "我", "你們", "今天", "的", "了", "在", "是", "他說", "大家", "一個", "不會",
+        "這樣", "所以", "還是", "沒有",
+    ];
     let mut records = Vec::new();
     'fill: for c in contexts {
         for span in &spans {
@@ -1379,7 +1986,13 @@ fn perf_full_store_per_key_and_enter_with_write() {
                 if (c.is_empty() || c == "^") && word.chars().count() == 1 {
                     continue;
                 }
-                records.push(Record { context: c.into(), reading: span.clone(), word: word.into(), weight: 1.0, day: DAY });
+                records.push(Record {
+                    context: c.into(),
+                    reading: span.clone(),
+                    word: word.into(),
+                    weight: 1.0,
+                    day: DAY,
+                });
                 if records.len() == CAPACITY {
                     break 'fill;
                 }
@@ -1426,15 +2039,26 @@ fn perf_full_store_per_key_and_enter_with_write() {
         assert!(o.candidates.len() > 1, "a second candidate to re-pick");
         e.key(k(KeyKind::Right)).unwrap();
         e.key(k(KeyKind::Enter)).unwrap();
-        let before: Vec<Record> = if first.is_some() { e.learner().records().to_vec() } else { Vec::new() };
+        let before: Vec<Record> = if first.is_some() {
+            e.learner().records().to_vec()
+        } else {
+            Vec::new()
+        };
         let t = Instant::now();
         e.key(k(KeyKind::Enter)).unwrap();
         let dt = t.elapsed();
         assert_eq!(e.learning_status(), 0, "the write succeeded");
         if first.is_none() {
             first = Some(dt);
-            base_lines = std::fs::read_to_string(dir.join("learning.tsv")).unwrap().lines().count();
-            assert_eq!(base_lines, n_records(&e) + 1, "the first write after open rewrote the file");
+            base_lines = std::fs::read_to_string(dir.join("learning.tsv"))
+                .unwrap()
+                .lines()
+                .count();
+            assert_eq!(
+                base_lines,
+                n_records(&e) + 1,
+                "the first write after open rewrote the file"
+            );
         } else {
             enters.push(dt);
             touched += changed(&before, &e);
@@ -1442,12 +2066,21 @@ fn perf_full_store_per_key_and_enter_with_write() {
     }
     let text = std::fs::read_to_string(dir.join("learning.tsv")).unwrap();
     assert!(touched > 0);
-    assert_eq!(text.lines().count(), base_lines + touched, "every later Enter appended its changed records, none rewrote");
+    assert_eq!(
+        text.lines().count(),
+        base_lines + touched,
+        "every later Enter appended its changed records, none rewrote"
+    );
     // ⌘⌫ (always a full rewrite), reported only
     type_syls(&mut e, &rows[0].join(" "));
     e.key(k(KeyKind::Space)).unwrap();
     let t = Instant::now();
-    e.key(Key { kind: KeyKind::Backspace, ch: '\0', modifiers: MOD_COMMAND }).unwrap();
+    e.key(Key {
+        kind: KeyKind::Backspace,
+        ch: '\0',
+        modifiers: MOD_COMMAND,
+    })
+    .unwrap();
     let forget = t.elapsed();
     let (pk, pe) = (p95(keys.clone()), p95(enters.clone()));
     println!(
@@ -1460,7 +2093,10 @@ fn perf_full_store_per_key_and_enter_with_write() {
     );
     let _ = std::fs::remove_dir_all(&dir);
     #[cfg(not(debug_assertions))]
-    assert!(pk < std::time::Duration::from_millis(16) && pe < std::time::Duration::from_millis(16), "p95 over 16 ms");
+    assert!(
+        pk < std::time::Duration::from_millis(16) && pe < std::time::Duration::from_millis(16),
+        "p95 over 16 ms"
+    );
 }
 
 // ---------- §12: single characters do not globalize; a smaller global boost ----------
@@ -1477,17 +2113,33 @@ fn decode(e: &mut Engine, left: &str, reading: &[String]) -> String {
 /// `texts[1..]` (the outputs decoded without and with the record), each prefixed by `ctx`. This is an
 /// approximation (it does not enumerate the beam). `None`: the gold sentence does not align one
 /// character to one syllable, so no key can be read; such rows are counted apart, not checked.
-fn row_collides(ctx: &str, texts: &[&str], rd: &[String], span: &[String], taught: &[&str], single: bool) -> Option<bool> {
+fn row_collides(
+    ctx: &str,
+    texts: &[&str],
+    rd: &[String],
+    span: &[String],
+    taught: &[&str],
+    single: bool,
+) -> Option<bool> {
     if texts[0].chars().count() != rd.len() {
         return None;
     }
-    Some(texts.iter().filter(|t| t.chars().count() == rd.len()).any(|t| {
-        let chars: Vec<char> = t.chars().collect();
-        rd.windows(span.len()).enumerate().filter(|(_, w)| *w == span).any(|(i, _)| {
-            let key = context_key(&format!("{ctx}{}", chars[..i].iter().collect::<String>()));
-            taught.iter().any(|t| collides(t, &key, single))
-        })
-    }))
+    Some(
+        texts
+            .iter()
+            .filter(|t| t.chars().count() == rd.len())
+            .any(|t| {
+                let chars: Vec<char> = t.chars().collect();
+                rd.windows(span.len())
+                    .enumerate()
+                    .filter(|(_, w)| *w == span)
+                    .any(|(i, _)| {
+                        let key =
+                            context_key(&format!("{ctx}{}", chars[..i].iter().collect::<String>()));
+                        taught.iter().any(|t| collides(t, &key, single))
+                    })
+            }),
+    )
 }
 fn has_span(rd: &[String], span: &[String]) -> bool {
     rd.windows(span.len()).any(|w| w == span)
@@ -1500,13 +2152,20 @@ fn single_character_never_globalizes_two_characters_do() {
     for c in ["可以", SENTINEL, "他", "我們"] {
         l.teach(c, &one, "再", "在", DAY);
     }
-    assert!(l.records().iter().all(|r| r.context != GLOBAL), "a single character never gets a global record");
+    assert!(
+        l.records().iter().all(|r| r.context != GLOBAL),
+        "a single character never gets a global record"
+    );
     let two = syls("ㄗㄞˋ ㄐㄧㄢˋ");
     let mut l = Learner::default();
     for c in ["可以", SENTINEL, "他"] {
         l.teach(c, &two, "再見", "在建", DAY);
     }
-    assert_eq!(l.records().iter().filter(|r| r.context == GLOBAL).count(), 1, "a two-character word does");
+    assert_eq!(
+        l.records().iter().filter(|r| r.context == GLOBAL).count(),
+        1,
+        "a two-character word does"
+    );
     // the lookup says which level answered
     assert_eq!(l.lookup("可以", &two, DAY).0, Level::Exact);
     assert_eq!(l.lookup("不以", &two, DAY).0, Level::LastChar);
@@ -1518,16 +2177,26 @@ fn old_single_character_global_record_is_dropped_at_load() {
     // a file written before §12, loaded by an engine: the record is not loaded at all
     let dir = tmp_dir("oldglobal");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(file_of(&dir), format!("{}\n\tㄗㄞˋ\t再\t1\t{DAY}\n", core::learn_store::HEADER)).unwrap();
+    std::fs::write(
+        file_of(&dir),
+        format!("{}\n\tㄗㄞˋ\t再\t1\t{DAY}\n", core::learn_store::HEADER),
+    )
+    .unwrap();
     let sent = shared().lex.to_syllables("另外現在在做").unwrap();
     let mut plain = engine();
     let want = decode(&mut plain, "", &sent);
     let mut e = engine();
     e.learning_open(&dir).unwrap();
-    assert!(e.learner().records().is_empty(), "dropped at load: it counts toward nothing");
+    assert!(
+        e.learner().records().is_empty(),
+        "dropped at load: it counts toward nothing"
+    );
     assert!(!e.learner().has_reading(&syls("ㄗㄞˋ")) && e.learner().is_empty());
     assert_eq!(decode(&mut e, "", &sent), want, "so decoding is unaffected");
-    assert!(raw(&dir).contains("再"), "the file is untouched until a write");
+    assert!(
+        raw(&dir).contains("再"),
+        "the file is untouched until a write"
+    );
     // the first learning Enter after open is a full rewrite: the record is gone from the file
     e.set_left_context(TAUGHT_AFTER);
     type_syls(&mut e, "ㄒㄧㄣ");
@@ -1545,8 +2214,10 @@ fn old_single_character_global_record_is_dropped_at_load() {
 fn pollution_zai_taught_under_two_contexts() {
     let lex = &shared().lex;
     let zai = syls("ㄗㄞˋ");
-    let mut rows: Vec<(String, String, Syls)> =
-        ["另外現在在做", "我現在在家", "他在學校"].iter().map(|s| (String::new(), s.to_string(), lex.to_syllables(s).unwrap())).collect();
+    let mut rows: Vec<(String, String, Syls)> = ["另外現在在做", "我現在在家", "他在學校"]
+        .iter()
+        .map(|s| (String::new(), s.to_string(), lex.to_syllables(s).unwrap()))
+        .collect();
     rows.extend(dev302_rows().into_iter().filter(|r| has_span(&r.2, &zai)));
     let mut e = engine();
     let base: Vec<String> = rows.iter().map(|r| decode(&mut e, &r.0, &r.2)).collect();
@@ -1557,9 +2228,20 @@ fn pollution_zai_taught_under_two_contexts() {
         pick(&mut e, 1, 1, "再");
         e.key(k(KeyKind::Enter)).unwrap();
     }
-    let zai_records: Vec<String> = e.learner().records().iter().filter(|r| r.word == "再").map(|r| r.context.clone()).collect();
-    assert_eq!(zai_records, ["可以"], "only the pick after 可以 is learned; none under ^, none global");
-    let (mut regress, mut changed, mut collided, mut unaligned, mut checked) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0);
+    let zai_records: Vec<String> = e
+        .learner()
+        .records()
+        .iter()
+        .filter(|r| r.word == "再")
+        .map(|r| r.context.clone())
+        .collect();
+    assert_eq!(
+        zai_records,
+        ["可以"],
+        "only the pick after 可以 is learned; none under ^, none global"
+    );
+    let (mut regress, mut changed, mut collided, mut unaligned, mut checked) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0);
     for (r, b) in rows.iter().zip(&base) {
         let after = decode(&mut e, &r.0, &r.2);
         match row_collides(&r.0, &[&r.1, b, &after], &r.2, &zai, &taught, true) {
@@ -1578,23 +2260,45 @@ fn pollution_zai_taught_under_two_contexts() {
             }
         }
     }
-    println!("global 再 records: {}", e.learner().records().iter().filter(|r| r.context == GLOBAL).count());
-    println!("rows {} (checked {checked}), colliding {}, unaligned (not checked) {}:", rows.len(), collided.len(), unaligned.len());
+    println!(
+        "global 再 records: {}",
+        e.learner()
+            .records()
+            .iter()
+            .filter(|r| r.context == GLOBAL)
+            .count()
+    );
+    println!(
+        "rows {} (checked {checked}), colliding {}, unaligned (not checked) {}:",
+        rows.len(),
+        collided.len(),
+        unaligned.len()
+    );
     for c in &collided {
         println!("  colliding: {c}");
     }
     for c in &unaligned {
         println!("  unaligned: {c}");
     }
-    println!("non-colliding changed rows: {}, regressions (whole sentence was right, now not): {}", changed.len(), regress.len());
+    println!(
+        "non-colliding changed rows: {}, regressions (whole sentence was right, now not): {}",
+        changed.len(),
+        regress.len()
+    );
     for c in &changed {
         println!("  changed: {c}");
     }
     for r in &regress {
         println!("  REGRESSION: {r}");
     }
-    assert!(regress.is_empty(), "non-colliding rows regressed: {regress:?}");
-    assert!(changed.is_empty(), "non-colliding rows changed: {changed:?}");
+    assert!(
+        regress.is_empty(),
+        "non-colliding rows regressed: {regress:?}"
+    );
+    assert!(
+        changed.is_empty(),
+        "non-colliding rows changed: {changed:?}"
+    );
 }
 
 /// §12 rules 5 and 6 at the lookup: a single character is used only at the exact full key, and never
@@ -1604,13 +2308,23 @@ fn single_character_rules_in_the_learner() {
     let one = syls("ㄗㄞˋ");
     let two = syls("ㄗㄞˋ ㄐㄧㄢˋ");
     let mut l = Learner::default();
-    assert!(l.teach(SENTINEL, &one, "再", "在", DAY).is_empty(), "rule 6: nothing is learned under ^");
+    assert!(
+        l.teach(SENTINEL, &one, "再", "在", DAY).is_empty(),
+        "rule 6: nothing is learned under ^"
+    );
     assert!(l.records().is_empty());
-    assert_eq!(l.teach(SENTINEL, &two, "再見", "在建", DAY).len(), 1, "a word of 2+ characters still learns under ^");
+    assert_eq!(
+        l.teach(SENTINEL, &two, "再見", "在建", DAY).len(),
+        1,
+        "a word of 2+ characters still learns under ^"
+    );
     l.teach("可以", &one, "再", "在", DAY);
     assert_eq!(l.lookup("可以", &one, DAY).0, Level::Exact);
     assert_eq!(l.lookup("可以", &one, DAY).1[0].0, "再");
-    assert!(l.lookup("所以", &one, DAY).1.is_empty(), "rule 5: no last-character level for a single character");
+    assert!(
+        l.lookup("所以", &one, DAY).1.is_empty(),
+        "rule 5: no last-character level for a single character"
+    );
     assert!(l.lookup(SENTINEL, &one, DAY).1.is_empty() && l.lookup("我們", &one, DAY).1.is_empty());
     // teach never makes a single-character record under ^ or the global key, however often it is
     // taught; saved and reloaded through the store none appears either
@@ -1618,13 +2332,18 @@ fn single_character_rules_in_the_learner() {
     for c in [SENTINEL, "可以", "他", "我們", SENTINEL] {
         l.teach(c, &one, "再", "在", DAY);
     }
-    assert!(l.records().iter().all(|r| r.context != SENTINEL && r.context != GLOBAL));
+    assert!(l
+        .records()
+        .iter()
+        .all(|r| r.context != SENTINEL && r.context != GLOBAL));
     let dir = tmp_dir("nosingleglobal");
     let (store, _, _) = core::learn_store::LearnStore::open(&dir).unwrap();
     store.save(l.records()).unwrap();
     let (_, loaded, _) = core::learn_store::LearnStore::open(&dir).unwrap();
     assert_eq!(loaded.len(), 3, "可以, 他, 我們");
-    assert!(loaded.iter().all(|r| r.context != SENTINEL && r.context != GLOBAL));
+    assert!(loaded
+        .iter()
+        .all(|r| r.context != SENTINEL && r.context != GLOBAL));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1633,19 +2352,37 @@ fn single_character_rules_in_the_learner() {
 #[test]
 fn single_character_pick_stays_where_it_was_taught() {
     let lex = &shared().lex;
-    let cases = [("所以", "在這裡"), ("", "所以在這裡"), ("，", "在這裡"), ("n-gram ", "在做"), ("", "在做"), ("可以", "在這裡")];
+    let cases = [
+        ("所以", "在這裡"),
+        ("", "所以在這裡"),
+        ("，", "在這裡"),
+        ("n-gram ", "在做"),
+        ("", "在做"),
+        ("可以", "在這裡"),
+    ];
     let mut plain = engine();
-    let base: Vec<String> = cases.iter().map(|(l, s)| decode(&mut plain, l, &lex.to_syllables(s).unwrap())).collect();
+    let base: Vec<String> = cases
+        .iter()
+        .map(|(l, s)| decode(&mut plain, l, &lex.to_syllables(s).unwrap()))
+        .collect();
     let mut e = engine();
     e.set_left_context("可以");
     assert_ne!(type_syls(&mut e, "ㄗㄞˋ").preedit, "再");
     pick(&mut e, 1, 1, "再");
     e.key(k(KeyKind::Enter)).unwrap();
     assert_eq!(e.learner().records().len(), 1);
-    assert_eq!(decode(&mut e, "可以", &syls("ㄗㄞˋ")), "再", "control: it works at the equal key");
+    assert_eq!(
+        decode(&mut e, "可以", &syls("ㄗㄞˋ")),
+        "再",
+        "control: it works at the equal key"
+    );
     for ((l, s), b) in cases.iter().zip(&base) {
         if *l != "可以" {
-            assert_eq!(&decode(&mut e, l, &lex.to_syllables(s).unwrap()), b, "{l}|{s} must not change");
+            assert_eq!(
+                &decode(&mut e, l, &lex.to_syllables(s).unwrap()),
+                b,
+                "{l}|{s} must not change"
+            );
         }
     }
     // a pick under ^ (sentence start, after punctuation or ASCII, unreadable context) leaves no record
@@ -1655,28 +2392,50 @@ fn single_character_pick_stays_where_it_was_taught() {
         assert_ne!(type_syls(&mut e, "ㄗㄞˋ").preedit, "再");
         pick(&mut e, 1, 1, "再");
         e.key(k(KeyKind::Enter)).unwrap();
-        assert!(e.learner().records().is_empty(), "no record under ^ ({left:?})");
+        assert!(
+            e.learner().records().is_empty(),
+            "no record under ^ ({left:?})"
+        );
         for ((l, s), b) in cases.iter().zip(&base) {
-            assert_eq!(&decode(&mut e, l, &lex.to_syllables(s).unwrap()), b, "{l}|{s} must not change");
+            assert_eq!(
+                &decode(&mut e, l, &lex.to_syllables(s).unwrap()),
+                b,
+                "{l}|{s} must not change"
+            );
         }
     }
     // an old ^ record loaded from a file is dropped at load (learn_store::valid) and so does not act
     let dir = tmp_dir("oldsentinel");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(file_of(&dir), format!("{}\n^\tㄗㄞˋ\t再\t1\t{DAY}\n", core::learn_store::HEADER)).unwrap();
+    std::fs::write(
+        file_of(&dir),
+        format!("{}\n^\tㄗㄞˋ\t再\t1\t{DAY}\n", core::learn_store::HEADER),
+    )
+    .unwrap();
     let mut e = engine();
     e.set_today(Some(DAY));
     e.learning_open(&dir).unwrap();
-    assert!(e.learner().records().is_empty() && e.learner().is_empty() && !e.learner().has_reading(&syls("ㄗㄞˋ")));
+    assert!(
+        e.learner().records().is_empty()
+            && e.learner().is_empty()
+            && !e.learner().has_reading(&syls("ㄗㄞˋ"))
+    );
     for ((l, s), b) in cases.iter().zip(&base) {
-        assert_eq!(&decode(&mut e, l, &lex.to_syllables(s).unwrap()), b, "{l}|{s} must not change");
+        assert_eq!(
+            &decode(&mut e, l, &lex.to_syllables(s).unwrap()),
+            b,
+            "{l}|{s} must not change"
+        );
     }
     // the first learning Enter is a full rewrite and the file loses the old line
     e.set_left_context(TAUGHT_AFTER);
     type_syls(&mut e, "ㄒㄧㄣ");
     pick(&mut e, 1, 1, "鑫");
     e.key(k(KeyKind::Enter)).unwrap();
-    assert!(!raw(&dir).contains("^\tㄗㄞˋ"), "dropped from the file by the rewrite");
+    assert!(
+        !raw(&dir).contains("^\tㄗㄞˋ"),
+        "dropped from the file by the rewrite"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1687,7 +2446,16 @@ fn single_character_pick_stays_where_it_was_taught() {
 #[test]
 fn zero_global_eps_keeps_beyond_per_key_words_out() {
     let s = shared();
-    let readings = ["ㄍㄨㄥ ㄙ", "ㄕˋ ㄐㄧㄢ", "ㄐㄧˋ ㄧˋ", "ㄧˋ ㄕˋ", "ㄍㄨㄥ ㄧˋ", "ㄧˋ ㄧˋ", "ㄕˋ ㄧˋ", "ㄐㄧㄢ ㄕˋ"];
+    let readings = [
+        "ㄍㄨㄥ ㄙ",
+        "ㄕˋ ㄐㄧㄢ",
+        "ㄐㄧˋ ㄧˋ",
+        "ㄧˋ ㄕˋ",
+        "ㄍㄨㄥ ㄧˋ",
+        "ㄧˋ ㄧˋ",
+        "ㄕˋ ㄧˋ",
+        "ㄐㄧㄢ ㄕˋ",
+    ];
     let (reading, word) = readings
         .iter()
         .find_map(|r| {
@@ -1705,11 +2473,23 @@ fn zero_global_eps_keeps_beyond_per_key_words_out() {
         pick(&mut e, 2, 2, &word);
         e.key(k(KeyKind::Enter)).unwrap();
     }
-    assert!(e.learner().records().iter().any(|r| r.context == GLOBAL && r.word == word));
+    assert!(e
+        .learner()
+        .records()
+        .iter()
+        .any(|r| r.context == GLOBAL && r.word == word));
     e.set_eps_global(6.0);
-    assert_eq!(decode(&mut e, "我們", &rd), word, "control: the global level can enumerate it");
+    assert_eq!(
+        decode(&mut e, "我們", &rd),
+        word,
+        "control: the global level can enumerate it"
+    );
     e.set_eps_global(0.0);
-    assert_eq!(decode(&mut e, "我們", &rd), plain, "eps 0: the global level is off");
+    assert_eq!(
+        decode(&mut e, "我們", &rd),
+        plain,
+        "eps 0: the global level is off"
+    );
 }
 
 struct Sweep {
@@ -1736,7 +2516,15 @@ const THIRD: &str = "我們";
 /// rows that cannot be keyed are left out and counted.
 fn global_sweep(eps: f64) -> Sweep {
     let lex = &shared().lex;
-    let mut sw = Sweep { learned: 0, wrong: 0, regress: 0, checked: 0, excluded: 0, unaligned: 0, groups: 0 };
+    let mut sw = Sweep {
+        learned: 0,
+        wrong: 0,
+        regress: 0,
+        checked: 0,
+        excluded: 0,
+        unaligned: 0,
+        groups: 0,
+    };
     let dev = dev302_rows();
     for g in &groups() {
         let teach = g.rows.iter().find(|r| r.kind == "teach").unwrap();
@@ -1748,7 +2536,12 @@ fn global_sweep(eps: f64) -> Sweep {
         let mut e = engine();
         e.set_eps_global(eps);
         let shown = decode(&mut e, "", &span);
-        let Some((x, y)) = [(&g.word, &g.other), (&g.other, &g.word)].into_iter().find(|(x, _)| **x != shown && x.chars().count() >= 2) else { continue };
+        let Some((x, y)) = [(&g.word, &g.other), (&g.other, &g.word)]
+            .into_iter()
+            .find(|(x, _)| **x != shown && x.chars().count() >= 2)
+        else {
+            continue;
+        };
         sw.groups += 1;
         let rows: Vec<&Row> = g.rows.iter().filter(|r| r.kind != "teach").collect();
         let rd = |r: &Row| syls(&r.reading);
@@ -1759,19 +2552,37 @@ fn global_sweep(eps: f64) -> Sweep {
             out.contains(want.as_str()) && !out.contains(not.as_str())
         };
         let before: Vec<String> = rows.iter().map(|r| decode(&mut e, THIRD, &rd(r))).collect();
-        let dev_rows: Vec<&(String, String, Syls)> = dev.iter().filter(|r| has_span(&r.2, &span)).collect();
-        let dev_before: Vec<String> = dev_rows.iter().map(|r| decode(&mut e, &r.0, &r.2)).collect();
+        let dev_rows: Vec<&(String, String, Syls)> =
+            dev.iter().filter(|r| has_span(&r.2, &span)).collect();
+        let dev_before: Vec<String> = dev_rows
+            .iter()
+            .map(|r| decode(&mut e, &r.0, &r.2))
+            .collect();
         for c in ["可以", ""] {
             e.set_left_context(c);
             type_syls(&mut e, &span.join(" "));
             pick(&mut e, span.len(), span.len(), x);
             e.key(k(KeyKind::Enter)).unwrap();
         }
-        assert!(e.learner().records().iter().any(|r| r.context == GLOBAL && &r.word == x), "{}: a global record", g.name);
+        assert!(
+            e.learner()
+                .records()
+                .iter()
+                .any(|r| r.context == GLOBAL && &r.word == x),
+            "{}: a global record",
+            g.name
+        );
         let show = eps == lm::LEARN_EPS_GLOBAL;
         for (r, b) in rows.iter().zip(&before) {
             let after = decode(&mut e, THIRD, &rd(r));
-            match row_collides(THIRD, &[&r.sent, b, &after], &rd(r), &span, &SWEEP_TAUGHT, false) {
+            match row_collides(
+                THIRD,
+                &[&r.sent, b, &after],
+                &rd(r),
+                &span,
+                &SWEEP_TAUGHT,
+                false,
+            ) {
                 None => {
                     sw.unaligned += 1;
                     continue;
@@ -1779,7 +2590,10 @@ fn global_sweep(eps: f64) -> Sweep {
                 Some(true) => {
                     sw.excluded += 1;
                     if show {
-                        println!("   colliding group row {} : {}|{} : {b} -> {after}", g.name, THIRD, r.sent);
+                        println!(
+                            "   colliding group row {} : {}|{} : {b} -> {after}",
+                            g.name, THIRD, r.sent
+                        );
                     }
                     continue;
                 }
@@ -1796,7 +2610,10 @@ fn global_sweep(eps: f64) -> Sweep {
                 sw.checked += 1;
                 let worse = *b == r.sent && after != r.sent;
                 if worse {
-                    println!("   eps {eps} {}: group row {} : {b} -> {after}  REGRESSION", g.name, r.sent);
+                    println!(
+                        "   eps {eps} {}: group row {} : {b} -> {after}  REGRESSION",
+                        g.name, r.sent
+                    );
                 }
                 sw.regress += worse as usize;
             }
@@ -1811,7 +2628,10 @@ fn global_sweep(eps: f64) -> Sweep {
                 Some(true) => {
                     sw.excluded += 1;
                     if show {
-                        println!("   colliding dev row {} : {}|{} : {b} -> {after}", g.name, r.0, r.1);
+                        println!(
+                            "   colliding dev row {} : {}|{} : {b} -> {after}",
+                            g.name, r.0, r.1
+                        );
                     }
                     continue;
                 }
@@ -1821,7 +2641,17 @@ fn global_sweep(eps: f64) -> Sweep {
             // A regression is a row that was exactly right and no longer is; a wrong row that changes is only listed.
             if after != *b {
                 let worse = *b == r.1;
-                println!("   eps {eps} {}: dev row {}|{} : {b} -> {after}{}", g.name, r.0, r.1, if worse { "  REGRESSION" } else { "  (was wrong)" });
+                println!(
+                    "   eps {eps} {}: dev row {}|{} : {b} -> {after}{}",
+                    g.name,
+                    r.0,
+                    r.1,
+                    if worse {
+                        "  REGRESSION"
+                    } else {
+                        "  (was wrong)"
+                    }
+                );
                 sw.regress += worse as usize;
             }
         }
@@ -1838,14 +2668,31 @@ fn global_eps_table() {
     for eps in [0.0, 0.5, 1.0, 1.5, 2.0, 6.0] {
         let s = global_sweep(eps);
         let (lr, wr, l, w) = mirror(eps);
-        println!("{eps} | {}/{} | {} ({}, {}, {}) | {lr}/{wr} | {l}/{w}  [groups {}]", s.learned, s.wrong, s.regress, s.checked, s.excluded, s.unaligned, s.groups);
+        println!(
+            "{eps} | {}/{} | {} ({}, {}, {}) | {lr}/{wr} | {l}/{w}  [groups {}]",
+            s.learned, s.wrong, s.regress, s.checked, s.excluded, s.unaligned, s.groups
+        );
         res.push((eps, s, lr, wr));
     }
-    assert_eq!(res[0].1.learned, 0, "eps_global 0: the global level has no effect");
-    let chosen = res.iter().find(|r| r.0 == lm::LEARN_EPS_GLOBAL).expect("chosen value is in the table");
+    assert_eq!(
+        res[0].1.learned, 0,
+        "eps_global 0: the global level has no effect"
+    );
+    let chosen = res
+        .iter()
+        .find(|r| r.0 == lm::LEARN_EPS_GLOBAL)
+        .expect("chosen value is in the table");
     assert_eq!(chosen.1.regress, 0, "chosen eps_global: 0 global pollution");
-    assert!(chosen.1.learned > 0, "chosen eps_global: global learn rate not 0");
+    assert!(
+        chosen.1.learned > 0,
+        "chosen eps_global: global learn rate not 0"
+    );
     for r in &res {
-        assert!(r.2 * 100 >= r.3 * 80 && r.2 >= 9, "mirror learn rate must not drop below 9: {} at {}", r.2, r.0);
+        assert!(
+            r.2 * 100 >= r.3 * 80 && r.2 >= 9,
+            "mirror learn rate must not drop below 9: {} at {}",
+            r.2,
+            r.0
+        );
     }
 }

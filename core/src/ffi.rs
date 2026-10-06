@@ -531,6 +531,224 @@ pub unsafe extern "C" fn shanjie_engine_learning_status(
     })
 }
 
+/// Opaque handle for learning records (five fields per record, s4 §4): context, reading, word,
+/// weight, day. The caller reads it only through the `shanjie_learning_output_*` accessors.
+pub struct ShanjieLearningOutput {
+    count: u32,
+    contexts: Vec<CString>,
+    readings: Vec<CString>,
+    words: Vec<CString>,
+    weights: Vec<f64>,
+    days: Vec<i64>,
+}
+
+/// S4 (learning): list every in-memory learning record (context, reading, word, weight, day).
+/// Works with or without a successful `learning_open`. Returns an opaque handle on success, or NULL
+/// on failure. The caller must free the handle using `shanjie_learning_output_free`.
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `out_handle` is NULL or valid for one pointer write.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_learning_list_all(
+    engine: *mut ShanjieEngine,
+    out_handle: *mut *mut ShanjieLearningOutput,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || out_handle.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: `out_handle` is non-NULL and writable per the caller contract.
+        unsafe { *out_handle = ptr::null_mut() };
+        // SAFETY: live handle, single-threaded use (§6).
+        let e = unsafe { &mut (*engine).0 };
+        let records = e.learning_list_all();
+        let count = records.len() as u32;
+
+        let mut contexts = Vec::with_capacity(count as usize);
+        let mut readings = Vec::with_capacity(count as usize);
+        let mut words = Vec::with_capacity(count as usize);
+        let mut weights = Vec::with_capacity(count as usize);
+        let mut days = Vec::with_capacity(count as usize);
+        for r in records {
+            // Interior NUL would break the C contract; it cannot come from a stored record
+            // (learn_store rejects control characters), so this is defensive only.
+            let Ok(context) = CString::new(r.context) else {
+                return SHANJIE_ERR_INTERNAL;
+            };
+            let Ok(reading) = CString::new(r.reading) else {
+                return SHANJIE_ERR_INTERNAL;
+            };
+            let Ok(word) = CString::new(r.word) else {
+                return SHANJIE_ERR_INTERNAL;
+            };
+            contexts.push(context);
+            readings.push(reading);
+            words.push(word);
+            weights.push(r.weight);
+            days.push(r.day);
+        }
+
+        let owned = Box::into_raw(Box::new(ShanjieLearningOutput {
+            count,
+            contexts,
+            readings,
+            words,
+            weights,
+            days,
+        }));
+
+        // SAFETY: `out_handle` is non-NULL and writable per the caller contract.
+        unsafe { *out_handle = owned };
+        SHANJIE_OK
+    })
+}
+
+/// S4 (learning): forget `word` under `reading` (reading_utf8 is a syllable string like
+/// "ㄅㄚˇ-ㄅㄚˇ") in every context, the same rule as ⌘⌫ on a highlighted candidate. After a
+/// successful `learning_open` the whole learning file is always rewritten (§4), even when memory
+/// held no record of the word; before one, only memory changes. Does not change the current
+/// display; the next key re-decodes with the new memory. 0 on success (including a word with no
+/// record: the rewrite still happened); 1 when engine or a string is NULL; 2 when a string is not
+/// UTF-8; 3 when the full rewrite failed (learning_status bit0 is set too, and the next write
+/// stays a full rewrite).
+///
+/// # Safety
+/// `engine` is NULL or a live handle; `reading_utf8` and `word_utf8` are NUL-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_engine_learning_forget(
+    engine: *mut ShanjieEngine,
+    reading_utf8: *const c_char,
+    word_utf8: *const c_char,
+) -> i32 {
+    guard(|| {
+        if engine.is_null() || reading_utf8.is_null() || word_utf8.is_null() {
+            return SHANJIE_ERR_NULL;
+        }
+        // SAFETY: NUL-terminated per the caller contract.
+        let Ok(reading) = unsafe { CStr::from_ptr(reading_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let Ok(word) = unsafe { CStr::from_ptr(word_utf8) }.to_str() else {
+            return SHANJIE_ERR_INVALID;
+        };
+        let reading_vec = reading
+            .split('-')
+            .map(String::from)
+            .collect::<Vec<String>>();
+        // SAFETY: live handle, single-threaded use (§6).
+        match unsafe { &mut (*engine).0 }.learning_forget(&reading_vec, word) {
+            Ok(()) => SHANJIE_OK,
+            Err(_) => SHANJIE_ERR_LOAD,
+        }
+    })
+}
+
+/// Get the number of records from a learning output handle.
+///
+/// # Safety
+/// `handle` is a valid handle from the library or NULL.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_count(handle: *mut ShanjieLearningOutput) -> u32 {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: handle is a valid `ShanjieLearningOutput` from the library.
+    unsafe { (*handle).count }
+}
+
+/// Get the context key of a learning record by index. Records hold learned words (R2): the shell
+/// must never log them.
+///
+/// # Safety
+/// `handle` is a valid handle from the library, and `index` is within bounds.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_context(
+    handle: *mut ShanjieLearningOutput,
+    index: u32,
+) -> *const c_char {
+    if handle.is_null() || index >= unsafe { (*handle).count } {
+        return ptr::null();
+    }
+    // SAFETY: handle is a valid `ShanjieLearningOutput` from the library.
+    unsafe { (&(*handle).contexts)[index as usize].as_ptr() }
+}
+
+/// Get the reading (syllables joined by `-`) of a learning record by index.
+///
+/// # Safety
+/// `handle` is a valid handle from the library, and `index` is within bounds.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_reading(
+    handle: *mut ShanjieLearningOutput,
+    index: u32,
+) -> *const c_char {
+    if handle.is_null() || index >= unsafe { (*handle).count } {
+        return ptr::null();
+    }
+    // SAFETY: handle is a valid `ShanjieLearningOutput` from the library.
+    unsafe { (&(*handle).readings)[index as usize].as_ptr() }
+}
+
+/// Get the word of a learning record by index.
+///
+/// # Safety
+/// `handle` is a valid handle from the library, and `index` is within bounds.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_word(
+    handle: *mut ShanjieLearningOutput,
+    index: u32,
+) -> *const c_char {
+    if handle.is_null() || index >= unsafe { (*handle).count } {
+        return ptr::null();
+    }
+    // SAFETY: handle is a valid `ShanjieLearningOutput` from the library.
+    unsafe { (&(*handle).words)[index as usize].as_ptr() }
+}
+
+/// Get the decayed-to-today weight of a learning record by index.
+///
+/// # Safety
+/// `handle` is a valid handle from the library, and `index` is within bounds.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_weight(
+    handle: *mut ShanjieLearningOutput,
+    index: u32,
+) -> f64 {
+    if handle.is_null() || index >= unsafe { (*handle).count } {
+        return 0.0;
+    }
+    // SAFETY: handle is a valid `ShanjieLearningOutput` from the library.
+    unsafe { (&(*handle).weights)[index as usize] }
+}
+
+/// Get the local calendar day (days since 1970-01-01) a learning record was last taught.
+///
+/// # Safety
+/// `handle` is a valid handle from the library, and `index` is within bounds.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_day(
+    handle: *mut ShanjieLearningOutput,
+    index: u32,
+) -> i64 {
+    if handle.is_null() || index >= unsafe { (*handle).count } {
+        return 0;
+    }
+    // SAFETY: handle is a valid `ShanjieLearningOutput` from the library.
+    unsafe { (&(*handle).days)[index as usize] }
+}
+
+/// Free learning output returned by `shanjie_engine_learning_list_all`.
+///
+/// # Safety
+/// `handle` is a NULL handle or an opaque handle from the library.
+#[no_mangle]
+pub unsafe extern "C" fn shanjie_learning_output_free(handle: *mut ShanjieLearningOutput) {
+    if !handle.is_null() {
+        // SAFETY: handle is an allocated `ShanjieLearningOutput` from the library.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
 /// S4 (custom vocabulary): open the custom vocabulary store in `dir/custom_vocab.tsv`.
 ///
 /// # Safety

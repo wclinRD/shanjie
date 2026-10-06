@@ -31,7 +31,12 @@ fn is_han(c: char) -> bool {
 /// §1.1: the last ≤ 2 consecutive Han characters at the end of `prefix`, stopping at any non-Han
 /// character; `SENTINEL` when there is none. Shared by learning and decoding.
 pub fn context_key(prefix: &str) -> String {
-    let tail: Vec<char> = prefix.chars().rev().take_while(|&c| is_han(c)).take(MAX_CONTEXT).collect();
+    let tail: Vec<char> = prefix
+        .chars()
+        .rev()
+        .take_while(|&c| is_han(c))
+        .take(MAX_CONTEXT)
+        .collect();
     if tail.is_empty() {
         SENTINEL.to_string()
     } else {
@@ -63,6 +68,20 @@ pub struct Record {
     pub day: i64,
 }
 
+/// A learning record formatted for display/export: the five fields of §4 with the reading joined
+/// by `-` (as on disk). What `Engine::learning_list_all` returns. `weight` is `decayed` to the
+/// query day — the value that decides whether the record still boosts decoding (§1.3, §1.4) — not
+/// the stored raw weight; `day` is the local calendar day it was last taught.
+/// No `Debug`: it holds learned words (s3a §6 R2).
+#[derive(Clone, PartialEq)]
+pub struct LearningRecord {
+    pub context: String,
+    pub reading: String,
+    pub word: String,
+    pub weight: f64,
+    pub day: i64,
+}
+
 /// Local calendar day as days since 1970-01-01 (the `Record::day` unit).
 pub fn local_day() -> i64 {
     #[repr(C)]
@@ -87,14 +106,18 @@ pub fn local_day() -> i64 {
     let (t, off) = unsafe {
         let t = time(std::ptr::null_mut());
         let mut tm: Tm = std::mem::zeroed();
-        let off = if localtime_r(&t, &mut tm).is_null() { 0 } else { tm.gmtoff };
+        let off = if localtime_r(&t, &mut tm).is_null() {
+            0
+        } else {
+            tm.gmtoff
+        };
         (t, off)
     };
     (t + off).div_euclid(86_400)
 }
 
 /// Weight of `r` on `today`: halves every `HALF_LIFE_DAYS`; a clock that went back never grows it.
-fn decayed(r: &Record, today: i64) -> f64 {
+pub fn decayed(r: &Record, today: i64) -> f64 {
     r.weight * 0.5f64.powf((today - r.day).max(0) as f64 / HALF_LIFE_DAYS)
 }
 
@@ -112,14 +135,20 @@ pub struct Learner {
 
 impl Learner {
     pub fn from_records(records: Vec<Record>) -> Learner {
-        let mut l = Learner { records, index: Default::default() };
+        let mut l = Learner {
+            records,
+            index: Default::default(),
+        };
         l.reindex();
         l
     }
     fn reindex(&mut self) {
         self.index.clear();
         for (i, r) in self.records.iter().enumerate() {
-            self.index.entry(reading_key(&r.reading)).or_default().push(i);
+            self.index
+                .entry(reading_key(&r.reading))
+                .or_default()
+                .push(i);
         }
     }
     pub fn records(&self) -> &[Record] {
@@ -152,7 +181,14 @@ impl Learner {
     }
     /// Adds `delta` to the decayed weight of (context, reading, word), creating the record if needed;
     /// returns the record as it now is.
-    fn bump(&mut self, context: &str, reading: &[String], word: &str, today: i64, delta: f64) -> Record {
+    fn bump(
+        &mut self,
+        context: &str,
+        reading: &[String],
+        word: &str,
+        today: i64,
+        delta: f64,
+    ) -> Record {
         match self.find(context, reading, word) {
             Some(i) => {
                 let r = &mut self.records[i];
@@ -161,7 +197,10 @@ impl Learner {
                 r.clone()
             }
             None => {
-                self.index.entry(reading_key(reading)).or_default().push(self.records.len());
+                self.index
+                    .entry(reading_key(reading))
+                    .or_default()
+                    .push(self.records.len());
                 let r = Record {
                     context: context.to_string(),
                     reading: reading.to_vec(),
@@ -178,7 +217,14 @@ impl Learner {
     /// word shown before the pick (its weight halves if it had a record under this key). Returns the
     /// records it changed, as they now are (displaced, taught, global; at most 3): what an append
     /// writes (§4).
-    pub fn teach(&mut self, context: &str, reading: &[String], word: &str, displaced: &str, today: i64) -> Vec<Record> {
+    pub fn teach(
+        &mut self,
+        context: &str,
+        reading: &[String],
+        word: &str,
+        displaced: &str,
+        today: i64,
+    ) -> Vec<Record> {
         // §12 rule 6: a single character neither learns nor looks up under "^".
         if is_single(word) && context == SENTINEL {
             return Vec::new();
@@ -195,7 +241,9 @@ impl Learner {
             return touched; // never globalizes (§12 rule 1)
         }
         // §1.3 globalize: ≥ 2 distinct full keys (SENTINEL counts) with an active record.
-        let Some(ix) = self.index.get(&reading_key(reading)) else { return touched };
+        let Some(ix) = self.index.get(&reading_key(reading)) else {
+            return touched;
+        };
         let keys: std::collections::HashSet<&str> = ix
             .iter()
             .map(|&i| &self.records[i])
@@ -203,7 +251,9 @@ impl Learner {
             .map(|r| r.context.as_str())
             .collect();
         if keys.len() >= 2 {
-            let prev = self.find(GLOBAL, reading, word).map(|i| self.records[i].clone());
+            let prev = self
+                .find(GLOBAL, reading, word)
+                .map(|i| self.records[i].clone());
             let have = prev.as_ref().map_or(0.0, |r| decayed(r, today));
             let now = self.bump(GLOBAL, reading, word, today, (1.0 - have).max(0.0));
             // A global already at full weight today is unchanged: nothing to append for it.
@@ -219,12 +269,26 @@ impl Learner {
     /// keeps the highest weight. Single characters skip the last-character level (§12 rule 5); a
     /// single-character record under "^" or the global key cannot exist (rule 6: teach does not make
     /// one, and load drops old ones).
-    pub fn lookup(&self, context: &str, reading: &[String], today: i64) -> (Level, Vec<(&str, f64)>) {
-        let Some(ix) = self.index.get(&reading_key(reading)) else { return (Level::Global, Vec::new()) };
-        let last = context.chars().next_back().filter(|_| context != SENTINEL && context != GLOBAL);
+    pub fn lookup(
+        &self,
+        context: &str,
+        reading: &[String],
+        today: i64,
+    ) -> (Level, Vec<(&str, f64)>) {
+        let Some(ix) = self.index.get(&reading_key(reading)) else {
+            return (Level::Global, Vec::new());
+        };
+        let last = context
+            .chars()
+            .next_back()
+            .filter(|_| context != SENTINEL && context != GLOBAL);
         let levels: [(Level, &dyn Fn(&str) -> bool); 3] = [
             (Level::Exact, &|c| c == context),
-            (Level::LastChar, &|c| last.is_some_and(|l| c != SENTINEL && c != GLOBAL && c.chars().next_back() == Some(l))),
+            (Level::LastChar, &|c| {
+                last.is_some_and(|l| {
+                    c != SENTINEL && c != GLOBAL && c.chars().next_back() == Some(l)
+                })
+            }),
             (Level::Global, &|c| c == GLOBAL),
         ];
         for (lv, level) in levels {
@@ -244,7 +308,11 @@ impl Learner {
                 }
             }
             if !hits.is_empty() {
-                hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(b.0)));
+                hits.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(a.0.cmp(b.0))
+                });
                 return (lv, hits);
             }
         }
@@ -265,7 +333,10 @@ impl Learner {
                 self.index.remove(&key);
             }
             if i != last {
-                let moved = self.index.get_mut(&reading_key(&self.records[last].reading)).expect("indexed");
+                let moved = self
+                    .index
+                    .get_mut(&reading_key(&self.records[last].reading))
+                    .expect("indexed");
                 *moved.iter_mut().find(|j| **j == last).expect("indexed") = i;
             }
             self.records.swap_remove(i);
@@ -273,16 +344,23 @@ impl Learner {
     }
     /// §1.5: removes every record of (reading, word) under every key, including SENTINEL and GLOBAL.
     pub fn forget(&mut self, reading: &[String], word: &str) {
-        let drop = self.index.get(&reading_key(reading)).map_or(Vec::new(), |ix| {
-            ix.iter().copied().filter(|&i| self.records[i].word == word).collect()
-        });
+        let drop = self
+            .index
+            .get(&reading_key(reading))
+            .map_or(Vec::new(), |ix| {
+                ix.iter()
+                    .copied()
+                    .filter(|&i| self.records[i].word == word)
+                    .collect()
+            });
         self.remove_at(drop);
     }
     /// §1.3: drop below PRUNE_FLOOR once decayed to `today`, then trim to CAPACITY (lowest first;
     /// among equal weights the later record goes first).
     pub fn prune(&mut self, today: i64) {
         let w: Vec<f64> = self.records.iter().map(|r| decayed(r, today)).collect();
-        let (mut live, mut drop): (Vec<usize>, Vec<usize>) = (0..w.len()).partition(|&i| w[i] >= PRUNE_FLOOR);
+        let (mut live, mut drop): (Vec<usize>, Vec<usize>) =
+            (0..w.len()).partition(|&i| w[i] >= PRUNE_FLOOR);
         if live.len() > CAPACITY {
             // A partition, not a sort: on a full store a save trims about one record.
             live.select_nth_unstable_by(CAPACITY, |&a, &b| w[b].total_cmp(&w[a]).then(a.cmp(&b)));

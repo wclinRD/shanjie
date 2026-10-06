@@ -137,7 +137,7 @@ final class LearningTests: XCTestCase {
         let dir = TestLearning.directory()
         let dialogs = FakeDialogs()
         let c = Controller(makeShell(learning: dir, dialogs: dialogs))
-        XCTAssertEqual(c.session.menu.map(\.title), ["標準鍵盤", "倚天鍵盤", "清除選字記憶…", "不要備份選字記憶"])
+        XCTAssertEqual(c.session.menu.map(\.title), ["標準鍵盤", "倚天鍵盤", "清除選字記憶…", "不要備份選字記憶", "自訂詞庫…", "關於善解輸入法"])
         XCTAssertEqual(c.session.menu.first { $0.title == "清除選字記憶…" }?.action, .clear)
         c.session.activate()
         try repick(c)
@@ -152,7 +152,7 @@ final class LearningTests: XCTestCase {
         XCTAssertEqual(dialogs.asked, 2)
         XCTAssertTrue(TestLearning.records(in: dir).isEmpty, "清除 did not clear")
         XCTAssertEqual(dialogs.failures, 0)
-        XCTAssertEqual(c.session.menu.map(\.title), ["標準鍵盤", "倚天鍵盤", "清除選字記憶…", "不要備份選字記憶"])
+        XCTAssertEqual(c.session.menu.map(\.title), ["標準鍵盤", "倚天鍵盤", "清除選字記憶…", "不要備份選字記憶", "自訂詞庫…", "關於善解輸入法"])
     }
 
     /// A clear that does not succeed is shown, never passed off as done (here: no engine at all).
@@ -366,5 +366,119 @@ final class LearningTests: XCTestCase {
         try repick(c)
         c.press(Keys.enter)
         XCTAssertTrue(c.session.menu.contains(MenuEntry(title: "選字記憶無法存檔")))
+    }
+
+    // MARK: learning_list_all / learning_forget through the core (system tests)
+
+    /// The five fields of one learning.tsv line (前文, 讀音, 詞, 權重, 日期; s4-learning.md §4).
+    private func fields(_ line: String) -> [String] {
+        line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// Teaching a re-pick through the shell, learningListAll must return exactly the record the
+    /// write put into learning.tsv: the same context, reading and word, with a numeric weight and
+    /// day (shanjie.h learning_list_all; the first write after learning_open is a full rewrite, so
+    /// the file holds one line per record).
+    func testLearningListAllMirrorsTheWrittenRecord() throws {
+        let dir = TestLearning.directory()
+        let c = Controller(makeShell(learning: dir))
+        c.session.activate()
+        let word = try repick(c)
+        c.press(Keys.enter)
+
+        let engine = try XCTUnwrap(c.session.shell.engine)
+        let entries = engine.learningListAll()
+        let lines = TestLearning.records(in: dir)
+        XCTAssertFalse(entries.isEmpty, "teaching stored a record")
+        XCTAssertEqual(entries.count, lines.count, "the full rewrite leaves the file equal to memory")
+        for (entry, line) in zip(entries, lines) {
+            let f = fields(line)
+            XCTAssertEqual(entry.context, f[0])
+            XCTAssertEqual(entry.reading, f[1])
+            XCTAssertEqual(entry.word, f[2])
+            XCTAssertEqual(entry.weight, try XCTUnwrap(Double(f[3])), accuracy: 1e-9)
+            XCTAssertEqual(entry.day, try XCTUnwrap(Int64(f[4])))
+        }
+        XCTAssertTrue(entries.contains { $0.reading == "ㄋㄧˇ" && $0.word == word },
+                      "the picked word is the record that was written")
+    }
+
+    /// learningForget(reading:word:) removes the record and always rewrites the learning file, so
+    /// neither learningListAll nor learning.tsv still holds the (reading, word).
+    func testLearningForgetRemovesTheRecordAndRewritesTheFile() throws {
+        let dir = TestLearning.directory()
+        let c = Controller(makeShell(learning: dir))
+        c.session.activate()
+        let word = try repick(c)
+        c.press(Keys.enter)
+        let engine = try XCTUnwrap(c.session.shell.engine)
+        let record = try XCTUnwrap(engine.learningListAll().first { $0.word == word })
+
+        XCTAssertEqual(engine.learningForget(reading: record.reading, word: record.word), 0)
+
+        let after = engine.learningListAll()
+        XCTAssertFalse(after.contains { $0.reading == record.reading && $0.word == record.word },
+                       "forget removed the (reading, word) from memory")
+        XCTAssertTrue(TestLearning.records(in: dir).allSatisfy {
+            let f = fields($0)
+            return !(f[1] == record.reading && f[2] == record.word)
+        }, "the rewritten file no longer contains the (reading, word)")
+    }
+
+    /// Forget removes every context key of the one (reading, word) (s4-learning.md §1.5): seed
+    /// learning.tsv with the word under two contexts, load it through the real core, then forget.
+    func testLearningForgetRemovesEveryContextKey() throws {
+        let dir = TestLearning.directory()
+        let reading = "ㄅㄚˇ-ㄅㄚˇ", word = "把手"
+        // A recent day keeps the decayed weight above PRUNE_FLOOR (0.05) on load (§1.3).
+        let day = Int64(Date().timeIntervalSince1970 / 86_400)
+        let seeded = "#shanjie-learning v1\n他\t\(reading)\t\(word)\t1.5\t\(day)\n好\t\(reading)\t\(word)\t2\t\(day)\n"
+        try Data(seeded.utf8).write(to: dir.appendingPathComponent("learning.tsv"))
+
+        let c = Controller(makeShell(learning: dir))
+        let engine = try XCTUnwrap(c.session.shell.engine)
+        XCTAssertEqual(engine.learningListAll().filter { $0.reading == reading && $0.word == word }.count, 2,
+                       "both contexts loaded")
+
+        XCTAssertEqual(engine.learningForget(reading: reading, word: word), 0)
+        XCTAssertFalse(engine.learningListAll().contains { $0.reading == reading && $0.word == word },
+                       "no context key of the word is left in memory")
+        XCTAssertTrue(TestLearning.records(in: dir).allSatisfy {
+            let f = fields($0)
+            return !(f[1] == reading && f[2] == word)
+        }, "the rewritten file holds the word under no context key")
+    }
+
+    /// No learning records at all: learningListAll is empty (it works with no store, shanjie.h).
+    func testLearningListAllWithNoRecordsIsEmpty() throws {
+        let dir = TestLearning.directory()
+        let c = Controller(makeShell(learning: dir))
+        XCTAssertTrue(try XCTUnwrap(c.session.shell.engine).learningListAll().isEmpty)
+        XCTAssertEqual(TestLearning.records(in: dir), [])
+    }
+
+    /// Forgetting a word with no record still succeeds and still rewrites: after a successful
+    /// learning_open the file is rewritten (here to just the header), so it appears even though
+    /// nothing was ever taught (shanjie.h).
+    func testLearningForgetOfAnUnknownWordStillRewritesTheStore() throws {
+        let dir = TestLearning.directory()
+        let c = Controller(makeShell(learning: dir))
+        let engine = try XCTUnwrap(c.session.shell.engine)
+        XCTAssertEqual(engine.learningForget(reading: "ㄅㄚˇ-ㄅㄚˇ", word: "把手"), 0)
+        XCTAssertTrue(engine.learningListAll().isEmpty)
+        XCTAssertEqual(TestLearning.records(in: dir), [], "the rewrite wrote only the header")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("learning.tsv").path),
+                      "the full rewrite created the file")
+    }
+
+    /// Without any learning directory, learning_open never succeeded: forget changes memory only
+    /// and still reports success (shanjie.h: "before any successful learning_open it changes memory
+    /// only").
+    func testLearningForgetWithoutAStoreChangesMemoryOnly() throws {
+        let c = Controller(makeShell(learning: nil))
+        let engine = try XCTUnwrap(c.session.shell.engine)
+        XCTAssertTrue(engine.learningListAll().isEmpty)
+        XCTAssertEqual(engine.learningForget(reading: "ㄅㄚˇ-ㄅㄚˇ", word: "把手"), 0)
+        XCTAssertTrue(engine.learningListAll().isEmpty)
     }
 }
